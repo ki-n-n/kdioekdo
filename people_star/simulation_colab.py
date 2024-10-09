@@ -289,7 +289,7 @@ class people_flow():
             if x[i, 1] == self.wall_y and on_paint[i] == False:
                 for k in range(len(x)):
                     if on_paint[k] == True:
-                        if np.abs(x[i, 0] - x[k, 0]) < self.R * 1.5 or np.abs(x[i, 1] - x[k, 1]) < self.R * 2:
+                        if np.abs(x[i, 0] - x[k, 0]) < self.R * 0.5 or np.abs(x[i, 1] - x[k, 1]) < self.R * 0.5:
                             break
                     if k == len(x) - 1:
                         on_paint[i] = True
