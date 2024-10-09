@@ -4,14 +4,11 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as pt
 import time
 
-from IPython.display import clear_output
-
 
 class people_flow():
     '''
     このクラスでは、Social Force Model (SFM)を用いて、指定した人数の人々が入口から入って出口から出るまでをシミュレーションする。
-    This class simulates people's flow from the entrance to the exit,
-    using Social Force Model.
+    
     '''
 
     def __init__(self, people_num, v_arg, repul_h, repul_m, target, R,
@@ -30,17 +27,17 @@ class people_flow():
         repul_m: 人と壁の間の反発力に関連する2つの要素を持つリスト型の変数。
         (詳細:人流シミュレーションのパラメータ推定手法(https://db-event.jpn.org/deim2017/papers/146.pdf)
         3.人流シミュレーションモデル 3.1 Social Force Model)
-
+        
         target: 形が(N,2)のリスト型の変数。Nは目的地の数。2次元目の要素は目的地のxy座標を表す。最後の目的地は出口と見なされる。
-
+        
         R: 人(粒子として表される)の半径
 
         min_p: 目的地にいる人が次の目的地に移動する確率の最小値。この確率の逆数が目的地での滞在時間の期待値として使われる。
-
+       
     　　 p_arg: 目的地にいる人が次の目的地に移動する確率を決定する2次元のリスト型の変数。1次元目の要素数は目的地の数から1を引いた数の因数。
         2次元目の1つ目の要素は確率の平均、2つ目の要素は標準偏差となる。この確率の逆数が目的地に滞在する時間の期待値として使われる。
         なお、1次元目の要素数が目的地の数から1引いた数より小さいとき、numpyのようにブロードキャストしてしようされる。
-
+        
         wall_x: 壁のx座標(左端は0であり右端がこの変数により決定される)
         
         wall_y: 壁のy座標(下端は0であり上端がこの変数により決定される)
@@ -283,14 +280,14 @@ class people_flow():
     def __start_paint(self, x, on_paint):
         '''
         入口が混んでいなければ入場を許可する
-        allow people to enter the area if the entrance is not crowded
         '''
         for i in range(len(x)):
             if x[i, 1] == self.wall_y and on_paint[i] == False:
                 for k in range(len(x)):
                     if on_paint[k] == True:
-                        if np.abs(x[i, 0] - x[k, 0]) < self.R * 0.5 or np.abs(x[i, 1] - x[k, 1]) < self.R * 0.5:
+                        if np.abs(x[i, 0] - x[k, 0]) < self.R * 0.5 or np.abs(x[i, 1] - x[k, 1]) < self.R * 0.5: 
                             break
+                        ''' 0.5 -> 1.5   0.5-> 2.0'''
                     if k == len(x) - 1:
                         on_paint[i] = True
         return on_paint
@@ -319,7 +316,6 @@ class people_flow():
         エリアにいる人を全員描画する
         paints all people and targets on the area
         '''
-        clear_output(True)
         ax = plt.axes()
         plt.xlim(0, self.wall_x)
         plt.ylim(0, self.wall_y)
@@ -339,16 +335,16 @@ class people_flow():
                 # 出口の描画
                 exit = pt.Rectangle(xy=(self.wall_x * 0.45, 0), width=self.wall_x * 0.1,
                     height=self.wall_y * 0.01, fc='r', ec='r', fill=True)
-            ax.add_patch(exit)
+                ax.add_patch(exit)
         # 入口の描画
         entrance = pt.Rectangle(xy=(self.wall_x * 0.45, self.wall_y * 0.99), width=self.wall_x * 0.1,
                                 height=self.wall_y * 0.01, fc='r', ec='r', fill=True)
 
         ax.add_patch(entrance)
-        ax.spines["top"].set_linewidth(2)
-        ax.spines["bottom"].set_linewidth(2)
-        ax.spines["left"].set_linewidth(2)
-        ax.spines["right"].set_linewidth(2)
+        ax.spines["top"].set_linewidth(1)
+        ax.spines["bottom"].set_linewidth(1)
+        ax.spines["left"].set_linewidth(1)
+        ax.spines["right"].set_linewidth(1)
         ax.spines["top"].set_color("coral")
         ax.spines["bottom"].set_color("coral")
         ax.spines["left"].set_color("coral")
@@ -356,7 +352,8 @@ class people_flow():
         ax.xaxis.set_visible(False)
         ax.yaxis.set_visible(False)
         ax.plot()
-        plt.show()
+        plt.pause(interval=0.01)
+        plt.gca().clear()
 
     def __heat_map(self, x, on_paint):
         '''
