@@ -316,6 +316,7 @@ class people_flow():
         エリアにいる人を全員描画する
         paints all people and targets on the area
         '''
+        exit = None
         ax = plt.axes()
         plt.xlim(0, self.wall_x)
         plt.ylim(0, self.wall_y)
