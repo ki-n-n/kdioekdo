@@ -169,7 +169,7 @@ class people_flow():
         # 人と壁の間に働く力を計算する
         # calculate repulsion between a person and walls
         fx += self.repul_m[0] * (math.e ** (-x[:, 0] / self.repul_m[1]))
-        fx -= self.repul_m[0] * (math.e ** (-(self.wall_x - x[:, 0]) / self.repul_m[1]))
+        fx -= self.repul_m[0] * (math.e ** (-(165 - x[:, 0]) / self.repul_m[1]))
 
         return fx, fy
 
@@ -187,10 +187,10 @@ class people_flow():
 
         # 誤って壁の位置より飛び出ていたら壁の内側に戻す
         for i in range(len(x)):
-            if x[i, 0] > self.wall_x:
-                x[i, 0] = self.wall_x
-            if x[i, 0] < 0:
-                x[i, 0] = 0
+            if x[i, 0] > 165:
+                x[i, 0] = 165
+            if x[i, 0] < 145:
+                x[i, 0] = 145
             if x[i, 1] > self.wall_y:
                 x[i, 1] = self.wall_y
             if x[i, 1] < 0:
