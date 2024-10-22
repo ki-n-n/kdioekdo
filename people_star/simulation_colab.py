@@ -336,7 +336,7 @@ class people_flow():
                 # 出口の描画
                 exit = pt.Rectangle(xy=(self.wall_x * 0.45, 0), width=self.wall_x * 0.1,
                     height=self.wall_y * 0.01, fc='r', ec='r', fill=True)
-                if exit is not None:
+                
                 ax.add_patch(exit)
         # 入口の描画
         entrance = pt.Rectangle(xy=(self.wall_x * 0.45, self.wall_y * 0.99), width=self.wall_x * 0.1,
