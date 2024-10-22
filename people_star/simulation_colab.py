@@ -343,6 +343,16 @@ class people_flow():
                                 height=self.wall_y * 0.01, fc='r', ec='r', fill=True)
 
         ax.add_patch(entrance)
+
+        left_wall = pt.Rectangle(xy=(self.wall_x * 0.45, 0),width=self.wall_x * 0.01, height=self.wall_y,
+                                fc='r', ec='r', fill=True)
+        
+        ax.add_patch(left_wall)
+
+        right_wall = pt.Rectangle(xy=(self.wall_x * 0.55, 0),width=self.wall_x * 0.01, height=self.wall_y,
+                                fc='r', ec='r', fill=True)
+        
+        ax.add_patch(right_wall)
         ax.spines["top"].set_linewidth(1)
         ax.spines["bottom"].set_linewidth(1)
         ax.spines["left"].set_linewidth(1)
