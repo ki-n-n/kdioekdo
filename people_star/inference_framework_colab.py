@@ -1,840 +1,416 @@
-from typing import Dict, Any
-
-import optuna
 import numpy as np
 import math
 import matplotlib.pyplot as plt
 import matplotlib.patches as pt
 import time
-import pickle
 
-from . import simulation
 
-class inference_framework():
+class people_flow():
     '''
-    このクラスでは、assessment_framework.pyにあるクラスassess_frameworkによって求められた最適な目的関数を用いてパラメータ推定をする。
-
-    This class infers parameters using objective functions decided by "assess_framework" in "assessment_framework.py."
+    Social Force Model (SFM)を用いて、指定した人数の人々が入口から入って出口から出るまでをシミュレーションする。
+    
     '''
-    def __init__(self, maps, people_num, target, R, min_p, wall_x, wall_y, in_target_d, dt,
-                 save_params, v_range, repul_h_range, repul_m_range, p_range, n_trials):
+
+    def __init__(self, people_num, v_arg, cons_h, cons_w,cons_x, target, R,
+                 min_target, p_arg, wall_x, wall_y, in_target_d, dt, disrupt_point=None, save_format=None, save_params=None):
+
+        try:
+            self.people_num = people_num
+
+            self.v_arg = np.asarray(v_arg)
+            if len(v_arg) != 2:
+                raise TypeError("The length of v_arg is mistaken.")
+
+            self.repul_h = np.asarray(cons_h)
+            if len(cons_h) != 2:
+                raise TypeError("The length of repul_h is mistaken.")
+
+            self.repul_m = np.asarray(cons_w)
+            if len(cons_w) != 2:
+                raise TypeError("The length of repul_m is mistaken.")
+            
+            self.rupul_n = np.asarray(cons_x)
+            if len(cons_x) != 2:
+                raise TypeError("the length of repul_n is mistaken.")
+
+            self.target = np.asarray(target)
+
+            self.R = R
+            self.min_p = min_target
+
+            self.p_arg = p_arg
+            if (len(self.target) - 1) % len(p_arg) != 0:
+                raise TypeError("The length of p_arg is mistaken.")
+
+            self.wall_x = wall_x
+            self.wall_y = wall_y
+            self.in_target_d = in_target_d
+
+            if save_format != None:
+                self.save_format = save_format
+                if save_format != "heat_map":
+                    raise ValueError("The save format you designated is not allowed.")
+
+            if save_params != None:
+                self.save_params = save_params
+                if save_format == "heat_map":
+                    if len(save_params) != 2:
+                        raise TypeError("The length of save_params is mistaken.")
+                    if wall_x % save_params[0][0] != 0 or wall_y % save_params[0][1] != 0:
+                        raise ValueError("The shape of the heat map is mistaken.")
+                    if save_params[1] < dt:
+                        raise ValueError("The interval of saving results is shorter than that of updating results.")
+
+            self.dt = dt
+            self.disrupt_point = disrupt_point
+
+        except TypeError as error:
+            print(error)
+        except ValueError as error:
+            print(error)
+
+    def __sincos(self, x1, x2, on_paint=True):
+
+        # x1,x2の組の個数が2以上かそうでないかで場合分けする
+        if x1.ndim == 2:
+            if x2.ndim == 2:
+                # 0除算を防ぐためにシミュレーションされていない人に対してははrに1を足す
+                r = np.sqrt((x2[:, 0] - x1[:, 0]) ** 2 + (x2[:, 1] - x1[:, 1]) ** 2) + np.logical_not(on_paint)
+                sin = on_paint * (x2[:, 1] - x1[:, 1]) / r
+                cos = on_paint * (x2[:, 0] - x1[:, 0]) / r
+                return sin, cos
+            else:
+                r = np.sqrt((x2[0] - x1[:, 0]) ** 2 + (x2[1] - x1[:, 1]) ** 2) + np.logical_not(on_paint)
+                sin = on_paint * (x2[1] - x1[:, 1]) / r
+                cos = on_paint * (x2[0] - x1[:, 0]) / r
+                return sin, cos
+
+        else:
+            if x2.ndim == 2:
+                # 0除算を防ぐためにシミュレーションされていない人に対してははrに1を足す
+                r = np.sqrt((x2[:, 0] - x1[0]) ** 2 + (x2[:, 1] - x1[1]) ** 2) + np.logical_not(on_paint)
+                sin = on_paint * (x2[:, 1] - x1[1]) / r
+                cos = on_paint * (x2[:, 0] - x1[0]) / r
+                return sin, cos
+            else:
+                r = np.sqrt((x2[0] - x1[0]) ** 2 + (x2[1] - x1[1]) ** 2) + np.logical_not(on_paint)
+                sin = on_paint * (x2[1] - x1[1]) / r
+                cos = on_paint * (x2[0] - x1[0]) / r
+                return sin, cos
+
+    def __force(self, x, v, v_opt, target_num, in_target, on_paint):
         '''
-        maps: 3次元numpy.ndarray。パラメータ推定する人流データを表現するヒートマップ(各時刻においてGridの中にいる人数を表す)。
+        人に働く力を計算
+        '''
+
+        sin, cos = self.__sincos(x, self.target[target_num], on_paint)
+        fx = on_paint * (v_opt * cos - v[:, 0])
+        fy = on_paint * (v_opt * sin - v[:, 1])
+
+        for i in range(len(x)):
+            if not on_paint[i]:
+                continue
+
+            on_paint[i] = False
+            sin, cos = self.__sincos(x[i], x, on_paint)
+            on_paint[i] = True
+            r = np.sqrt((x[:, 0] - x[i, 0]) ** 2 + (x[:, 1] - x[i, 1]) ** 2)
+            f_repul_h = self.repul_h[0] * (math.e ** (-r / self.repul_h[1]))
+            fx_repul_h = np.array(f_repul_h * cos)
+            fy_repul_h = np.array(f_repul_h * sin)
+
+            # 人から遠ざかる方向に反発力が働くのでマイナス
+            fx[i] -= np.sum(fx_repul_h)
+            fy[i] -= np.sum(fy_repul_h)
+
+        # 人と壁の間に働く力を計算
+        fx += self.repul_m[0] * (math.e ** (-(x[:, 0] - 135) / self.repul_m[1]))
+        fx -= self.repul_m[0] * (math.e ** (-(165 - x[:, 0]) / self.repul_m[1]))
         
-        people_num, target, R, min_p, wall_x, wall_y, in_target_d,
-        dt, save_params: 人流シミュレーションに使う変数。simulation.pyのpeople_flowを参照
-
-        v_range: (2,2)の形であるリスト型の変数。人の速さの平均と標準偏差を推定するとき、それぞれがとりうる値の範囲を表す。
-
-        repul_h_range: (2,2)の形であるリスト型の変数。人の間の反発力に関する2つのパラメータを推定するとき、それぞれがとりうる値の範囲を表す。
-        (詳細:人流シミュレーションのパラメータ推定手法(https://db-event.jpn.org/deim2017/papers/146.pdf)
-        3.人流シミュレーションモデル 3.1 Social Force Model)
-
-        repul_m_range: (2,2)の形であるリスト型の変数。人と壁の間の反発力に関する2つのパラメータを推定するとき、それぞれがとりうる値の範囲を表す。
-        (詳細:人流シミュレーションのパラメータ推定手法(https://db-event.jpn.org/deim2017/papers/146.pdf)
-        3.人流シミュレーションモデル 3.1 Social Force Model)
-
-        p_range: (2,2)の形であるリスト型の変数。次の目的地に移動する確率の平均と標準偏差を推定するとき、それぞれがとりうる値の範囲を表す。
-        なお、パラメータ推定では、次の目的地に移動する確率はどの目的地においても等しいものとして計算する。
-
-        n_trials: 推定したパラメータを最適化する回数
-        '''
-        self.maps = maps
-        self.people_num = people_num
-        self.target = target
-        self.R = R
-        self.min_p = min_p
-        self.wall_x = wall_x
-        self.wall_y = wall_y
-        self.in_target_d = in_target_d
-        self.dt = dt
-        self.save_format = "heat_map"
-        self.save_params = save_params
-
-        self.v_range = v_range
-        self.repul_h_range = repul_h_range
-        self.repul_m_range = repul_m_range
-        self.p_range = p_range
-        self.n_trials = n_trials
-
-        self.study = dict()
-
-    def __SSD(self, trial):
-        # 目的関数SSDの実装
-        v_ave = trial.suggest_uniform("average_of_v", self.v_range[0][0], self.v_range[0][1])
-        v_sd = trial.suggest_uniform("standard_deviation_of_v", self.v_range[1][0], self.v_range[1][1])
-        repul_h_arg1 = trial.suggest_uniform("arg1_of_repul_h", self.repul_h_range[0][0], self.repul_h_range[0][1])
-        repul_h_arg2 = trial.suggest_uniform("arg2_of_repul_h", self.repul_h_range[1][0], self.repul_h_range[1][1])
-        repul_m_arg1 = trial.suggest_uniform("arg1_of_repul_m", self.repul_m_range[0][0], self.repul_m_range[0][1])
-        repul_m_arg2 = trial.suggest_uniform("arg2_of_repul_m", self.repul_m_range[1][0], self.repul_m_range[1][1])
-        p_ave = trial.suggest_uniform("average_of_p", self.p_range[0][0], self.p_range[0][1])
-        p_sd = trial.suggest_uniform("standard_deviation_of_p", self.p_range[1][0], self.p_range[1][1])
-        # "disrupt_point"を与えられた人流データの長さ分にする
-        model = simulation.people_flow(self.people_num, [v_ave, v_sd], [repul_h_arg1, repul_h_arg2],
-                                [repul_m_arg1, repul_m_arg2], self.target, self.R, self.min_p,
-                                [[p_ave, p_sd]], self.wall_x, self.wall_y, self.in_target_d, self.dt,
-                                len(self.maps) * self.save_params[1] + 1,
-                                self.save_format, self.save_params)
-        result = model.simulate()
-        result = np.asarray(result)
-        ans = self.maps.copy()
-        # ヒートマップの時間方向の長さが一致しないとき、後方の長い部分を切り捨てる
-        if len(ans) > len(result):
-            ans = np.delete(ans, np.s_[len(result):], axis=0)
-        elif len(result) > len(ans):
-            result = np.delete(result, np.s_[len(ans):], axis=0)
-        return np.sum((ans - result) ** 2)
-
-    def __SAD(self, trial):
-        # 目的関数SADの実装
-        v_ave = trial.suggest_uniform("average_of_v", self.v_range[0][0], self.v_range[0][1])
-        v_sd = trial.suggest_uniform("standard_deviation_of_v", self.v_range[1][0], self.v_range[1][1])
-        repul_h_arg1 = trial.suggest_uniform("arg1_of_repul_h", self.repul_h_range[0][0], self.repul_h_range[0][1])
-        repul_h_arg2 = trial.suggest_uniform("arg2_of_repul_h", self.repul_h_range[1][0], self.repul_h_range[1][1])
-        repul_m_arg1 = trial.suggest_uniform("arg1_of_repul_m", self.repul_m_range[0][0], self.repul_m_range[0][1])
-        repul_m_arg2 = trial.suggest_uniform("arg2_of_repul_m", self.repul_m_range[1][0], self.repul_m_range[1][1])
-        p_ave = trial.suggest_uniform("average_of_p", self.p_range[0][0], self.p_range[0][1])
-        p_sd = trial.suggest_uniform("standard_deviation_of_p", self.p_range[1][0], self.p_range[1][1])
-        # "disrupt_point"を与えられた人流データの長さ分にする
-        model = simulation.people_flow(self.people_num, [v_ave, v_sd], [repul_h_arg1, repul_h_arg2],
-                                [repul_m_arg1, repul_m_arg2], self.target, self.R, self.min_p,
-                                [[p_ave, p_sd]], self.wall_x, self.wall_y, self.in_target_d, self.dt,
-                                len(self.maps) * self.save_params[1] + 1,
-                                self.save_format, self.save_params)
-        result = model.simulate()
-        result = np.asarray(result)
-        ans = self.maps.copy()
-        # ヒートマップの時間方向の長さが一致しないとき、後方の長い部分を切り捨てる
-        if len(ans) > len(result):
-            ans = np.delete(ans, np.s_[len(result):], axis=0)
-        elif len(result) > len(ans):
-            result = np.delete(result, np.s_[len(ans):], axis=0)
-        return np.sum(abs(ans - result))
-
-    def __KL(self, trial):
-        # 目的関数KLの実装
-        v_ave = trial.suggest_uniform("average_of_v", self.v_range[0][0], self.v_range[0][1])
-        v_sd = trial.suggest_uniform("standard_deviation_of_v", self.v_range[1][0], self.v_range[1][1])
-        repul_h_arg1 = trial.suggest_uniform("arg1_of_repul_h", self.repul_h_range[0][0], self.repul_h_range[0][1])
-        repul_h_arg2 = trial.suggest_uniform("arg2_of_repul_h", self.repul_h_range[1][0], self.repul_h_range[1][1])
-        repul_m_arg1 = trial.suggest_uniform("arg1_of_repul_m", self.repul_m_range[0][0], self.repul_m_range[0][1])
-        repul_m_arg2 = trial.suggest_uniform("arg2_of_repul_m", self.repul_m_range[1][0], self.repul_m_range[1][1])
-        p_ave = trial.suggest_uniform("average_of_p", self.p_range[0][0], self.p_range[0][1])
-        p_sd = trial.suggest_uniform("standard_deviation_of_p", self.p_range[1][0], self.p_range[1][1])
-        # "disrupt_point"を与えられた人流データの長さ分にする
-        model = simulation.people_flow(self.people_num, [v_ave, v_sd], [repul_h_arg1, repul_h_arg2],
-                                [repul_m_arg1, repul_m_arg2], self.target, self.R, self.min_p,
-                                [[p_ave, p_sd]], self.wall_x, self.wall_y, self.in_target_d, self.dt,
-                                len(self.maps) * self.save_params[1] + 1,
-                                self.save_format, self.save_params)
-        result = model.simulate()
-        result = np.asarray(result)
-        ans = self.maps.copy()
-        result /= np.sum(result, axis=(1, 2)).reshape((len(result), 1, 1))
-        # 0除算によりnanになっていたらその部分を除く
-        if np.isnan(np.sum(result)):
-            result = result[~np.isnan(result)].reshape((-1, 30, 30))
-        ans /= np.sum(ans, axis=(1, 2)).reshape((len(ans), 1, 1))
-        # ヒートマップの時間方向の長さが一致しないとき、後方の長い部分を切り捨てる
-        if len(ans) > len(result):
-            ans = np.delete(ans, np.s_[len(result):], axis=0)
-        elif len(result) > len(ans):
-            result = np.delete(result, np.s_[len(ans):], axis=0)
-        # 0除算を防ぐための微小な値
-        epsilon = 0.001
-        return np.sum(result * np.log((result + epsilon) / (ans + epsilon)))
-
-    def __ZNCC(self, trial):
-        # 目的関数ZNCCの実装
-        v_ave = trial.suggest_uniform("average_of_v", self.v_range[0][0], self.v_range[0][1])
-        v_sd = trial.suggest_uniform("standard_deviation_of_v", self.v_range[1][0], self.v_range[1][1])
-        repul_h_arg1 = trial.suggest_uniform("arg1_of_repul_h", self.repul_h_range[0][0], self.repul_h_range[0][1])
-        repul_h_arg2 = trial.suggest_uniform("arg2_of_repul_h", self.repul_h_range[1][0], self.repul_h_range[1][1])
-        repul_m_arg1 = trial.suggest_uniform("arg1_of_repul_m", self.repul_m_range[0][0], self.repul_m_range[0][1])
-        repul_m_arg2 = trial.suggest_uniform("arg2_of_repul_m", self.repul_m_range[1][0], self.repul_m_range[1][1])
-        p_ave = trial.suggest_uniform("average_of_p", self.p_range[0][0], self.p_range[0][1])
-        p_sd = trial.suggest_uniform("standard_deviation_of_p", self.p_range[1][0], self.p_range[1][1])
-        # "disrupt_point"を与えられた人流データの長さ分にする
-        model = simulation.people_flow(self.people_num, [v_ave, v_sd], [repul_h_arg1, repul_h_arg2],
-                                [repul_m_arg1, repul_m_arg2], self.target, self.R, self.min_p,
-                                [[p_ave, p_sd]], self.wall_x, self.wall_y, self.in_target_d, self.dt,
-                                len(self.maps) * self.save_params[1] + 1,
-                                self.save_format, self.save_params)
-        result = model.simulate()
-        result = np.asarray(result)
-        ans = self.maps.copy()
-        ans = np.asarray(ans)
-        # ヒートマップの時間方向の長さが一致しないとき、後方の長い部分を切り捨てる
-        if len(ans) > len(result):
-            ans = np.delete(ans, np.s_[len(result):], axis=0)
-        elif len(result) > len(ans):
-            result = np.delete(result, np.s_[len(ans):], axis=0)
-        result -= np.sum(result, axis=(1, 2)).reshape((len(result), 1, 1)) / (result.shape[1] * result.shape[2])
-        ans -= np.sum(ans, axis=(1, 2)).reshape((len(ans), 1, 1)) / (ans.shape[1] * ans.shape[2])
-        numerator = np.sum(result * ans, axis=(1, 2))
-        denominator1 = np.sqrt(np.sum(result ** 2, axis=(1, 2)))
-        denominator2 = np.sqrt(np.sum(ans ** 2, axis=(1, 2)))
-        # 0除算を防ぐための微小な値
-        epsilon = 0.001
-        return np.sum(numerator / (denominator1 * denominator2 + epsilon))
-
-    def __optimize(self, objective, n_trials, name):
-        # 推定パラメータを最適化する
-        sampler = optuna.samplers.CmaEsSampler()
-        self.study[name] = optuna.create_study(sampler=sampler)
-        self.study[name].optimize(objective, n_trials=n_trials)
-
-    def paint_opt(self, name):
-        # 推定したパラメータの値と目的関数の値の関係、最適化回数とそれまでの最高の目的関数の値の関係をグラフ化
-        # 推定したパラメータの値を格納するリスト
-        x = dict()
-        # 目的関数の値を格納するリスト
-        y = list()
-        # それまでの最高の目的関数の値を格納するリスト
-        y_best = list()
-        # 各パラメータの値のリストを作る
-        for param_name in self.study[name].trials[0].params.keys():
-            x[param_name] = list()
-        for trial in self.study[name].trials:
-            for param_name, param in trial.params.items():
-                x[param_name].append(param)
-            y.append(trial.value)
-            y_best.append(np.min(y))
-        param_num = len(self.study[name].trials[0].params)
-
-        # 各グラフのサイズを(5,5)としてグラフ化
-        plt.figure(figsize=((param_num + 1) * 5, 5))
-        i = 1
-        for param_name in self.study[name].trials[0].params.keys():
-            ax = plt.subplot(1, param_num + 1, i)
-            ax.set_xlabel(param_name)
-            ax.set_ylabel('value')
-            ax.scatter(x[param_name], y)
-            i += 1
-        ax = plt.subplot(1, param_num + 1, param_num + 1)
-        ax.set_xlabel('trial')
-        ax.set_ylabel('best_value')
-        ax.plot(y_best)
-
-    def set_study(self, name, path):
-        with open(path, 'rb') as f:
-            self.study[name] = pickle.load(f)
-
-    def save_opt(self, name):
-        # optunaのオブジェクトstudy(パラメータの最適化に関するデータを持つ)をピクル化して保存
-        filename = name + '.txt'
-        with open(filename, 'wb') as f:
-            pickle.dump(self.study[name], f)
-
-    def whole_opt(self, infer_dict=None):
-        # すべてのパラメータを最適化する
-        if infer_dict is None:
-            infer_dict = {"v":"ZNCC","repul_h":"ZNCC","repul_m":"KL","p":"ZNCC"}
-
-        if "SSD" in infer_dict.values():
-            self.__optimize(self.__SSD, self.n_trials, 'SSD')
-            self.paint_opt('SSD')
-            self.save_opt('SSD')
-        if "SAD" in infer_dict.values():
-            self.__optimize(self.__SAD, self.n_trials, 'SAD')
-            self.paint_opt('SAD')
-            self.save_opt('SAD')
-        if "KL" in infer_dict.values():
-            self.__optimize(self.__KL, self.n_trials, 'KL')
-            self.paint_opt('KL')
-            self.save_opt('KL')
-        if "ZNCC" in infer_dict.values():
-            self.__optimize(self.__ZNCC, self.n_trials, 'ZNCC')
-            self.paint_opt('ZNCC')
-            self.save_opt('ZNCC')
-
-        inferred_params = dict()
-        if "v" in infer_dict:
-            inferred_params['average_of_v'] = self.study[infer_dict["v"]].best_params['averafe_of_v']
-            inferred_params['standard_deviation_of_v'] = self.study[infer_dict["v"]].best_params['standard_deviation_of_v']
-        if "repul_h" in infer_dict:
-            inferred_params['arg1_of_repul_h'] = self.study[infer_dict["repul_h"]].best_params['arg1_of_repul_h']
-            inferred_params['arg2_of_repul_h'] = self.study[infer_dict["repul_h"]].best_params['arg2_of_repul_h']
-        if "repul_m" in infer_dict:
-            inferred_params['arg1_of_repul_m'] = self.study[infer_dict["repul_m"]].best_params['arg1_of_repul_m']
-            inferred_params['arg2_of_repul_m'] = self.study[infer_dict["repul_m"]].best_params['arg2_of_repul_m']
-        if "p" in infer_dict:
-            inferred_params['average_of_p'] = self.study[infer_dict["p"]].best_params['averafe_of_p']
-            inferred_params['standard_deviation_of_p'] = self.study[infer_dict["p"]].best_params['standard_deviation_of_p']
-
-        return inferred_params
-
-
-class inference_framework_detail():
-    '''
-    このクラスでは、inference_frameworkで推定した結果を、さらに"assessment_framework.py"にあるassessment_framework_detailで求めた
-    最適な目的関数を用いて推定する。評価時のように、1回の最適化では1種類のパラメータだけを推定して、他のパラメータは固定する。
-
-    This class infers more exact parameters using objective functions decided by "assess_framework_detail" in "assessment_framework.py."
-    As well as the assessment by "assessment_framework_detail," only one kind of parameter is inferred in each optimization.
-    '''
-    def __init__(self, maps, people_num, v_arg, repul_h, repul_m, target, R, min_p, p_arg, wall_x, wall_y, in_target_d,
-                 dt,
-                 save_params, v_range, repul_h_range, repul_m_range, p_range, n_trials):
-        '''
-        maps: 3次元numpy.ndarray。パラメータ推定する人流データを表現するヒートマップ(各時刻においてGridの中にいる人数を表す)。
         
-        people_num, v_arg, repul_h, repul_m, target, R, min_p, p_arg, wall_x, wall_y, in_target_d,
-        dt, save_params: 人流シミュレーションに使う変数。simulation.pyのpeople_flowを参照
 
-        v_range: (2,2)の形であるリスト型の変数。人の速さの平均と標準偏差を推定するとき、それぞれがとりうる値の範囲を表す。
+        # 上記の式を定数を変更しながらシミュレーションの結果を考察
 
-        repul_h_range: (2,2)の形であるリスト型の変数。人の間の反発力に関する2つのパラメータを推定するとき、それぞれがとりうる値の範囲を表す。
-        (詳細:人流シミュレーションのパラメータ推定手法(https://db-event.jpn.org/deim2017/papers/146.pdf)
-        3.人流シミュレーションモデル 3.1 Social Force Model)
+        return fx, fy
 
-        repul_m_range: (2,2)の形であるリスト型の変数。人と壁の間の反発力に関する2つのパラメータを推定するとき、それぞれがとりうる値の範囲を表す。
-        (詳細:人流シミュレーションのパラメータ推定手法(https://db-event.jpn.org/deim2017/papers/146.pdf)
-        3.人流シミュレーションモデル 3.1 Social Force Model)
-
-        p_range: (2,2)の形であるリスト型の変数。次の目的地に移動する確率の平均と標準偏差を推定するとき、それぞれがとりうる値の範囲を表す。
-        なお、パラメータ推定では、次の目的地に移動する確率はどの目的地においても等しいものとして計算する。
-
-        n_trials: 推定したパラメータを最適化する回数
+    def __calculate(self, x, v, v_opt, p, target_num,
+                    target, in_target, stay_target, on_paint):
         '''
-        self.maps = maps
-        self.people_num = people_num
-        self.v_arg = v_arg
-        self.repul_h = repul_h
-        self.repul_m = repul_m
-        self.target = target
-        self.R = R
-        self.min_p = min_p
-        self.p_arg = p_arg
-        self.wall_x = wall_x
-        self.wall_y = wall_y
-        self.in_target_d = in_target_d
-        self.dt = dt
-        self.save_format = "heat_map"
-        self.save_params = save_params
+        人の状態を更新
+        '''
 
-        self.v_range = v_range
-        self.repul_h_range = repul_h_range
-        self.repul_m_range = repul_m_range
-        self.p_range = p_range
-        self.n_trials = n_trials
+        # シミュレーションする場所にいない人は更新しない
+        x[:, 0] += on_paint * v[:, 0] * self.dt
+        x[:, 1] += on_paint * v[:, 1] * self.dt
 
-        self.study = dict()
+        # 誤って壁の位置より飛び出ていたら壁の内側に戻す 
+        '''
+        このコードを変更済
+        '''
+        for i in range(len(x)):
+            if x[i, 0] > self.wall_x * 0.55:
+                x[i, 0] = self.wall_x * 0.55
+            if x[i, 0] < self.wall_x * 0.45:
+                x[i, 0] = self.wall_x * 0.45
+            if x[i, 1] > self.wall_y:
+                x[i, 1] = self.wall_y
+            if x[i, 1] < 0:
+                x[i, 1] = 0
 
-    def __SSD_v(self, trial):
-        # 速さに関するパラメータを推定するときの目的関数SSDの実装
-        v_ave = trial.suggest_uniform("average_of_v", self.v_range[0][0], self.v_range[0][1])
-        v_sd = trial.suggest_uniform("standard_deviation_of_v", self.v_range[1][0], self.v_range[1][1])
-        # "disrupt_point"を与えられた人流データの長さ分にする
-        model = simulation.people_flow(self.people_num, [v_ave, v_sd], self.repul_h, self.repul_m, self.target, self.R,
-                                self.min_p,
-                                self.p_arg, self.wall_x, self.wall_y, self.in_target_d, self.dt,
-                                len(self.maps) * self.save_params[1] + 1,
-                                self.save_format, self.save_params)
-        result = model.simulate()
-        result = np.asarray(result)
-        ans = self.maps.copy()
-        # ヒートマップの時間方向の長さが一致しないとき、後方の長い部分を切り捨てる
-        if len(ans) > len(result):
-            ans = np.delete(ans, np.s_[len(result):], axis=0)
-        elif len(result) > len(ans):
-            result = np.delete(result, np.s_[len(ans):], axis=0)
-        return np.sum((ans - result) ** 2)
+        fx, fy = self.__force(x, v, v_opt, target_num, in_target, on_paint)
 
-    def __SSD_repul_h(self, trial):
-        # 人の間の反発力に関するパラメータを推定するときの目的関数SSDの実装
-        repul_h_arg1 = trial.suggest_uniform("arg1_of_repul_h", self.repul_h_range[0][0], self.repul_h_range[0][1])
-        repul_h_arg2 = trial.suggest_uniform("arg2_of_repul_h", self.repul_h_range[1][0], self.repul_h_range[1][1])
-        # "disrupt_point"を与えられた人流データの長さ分にする
-        model = simulation.people_flow(self.people_num, self.v_arg, [repul_h_arg1, repul_h_arg2], self.repul_m, self.target,
-                                self.R, self.min_p,
-                                self.p_arg, self.wall_x, self.wall_y, self.in_target_d, self.dt,
-                                len(self.maps) * self.save_params[1] + 1,
-                                self.save_format, self.save_params)
-        result = model.simulate()
-        result = np.asarray(result)
-        ans = self.maps.copy()
-        # ヒートマップの時間方向の長さが一致しないとき、後方の長い部分を切り捨てる
-        if len(ans) > len(result):
-            ans = np.delete(ans, np.s_[len(result):], axis=0)
-        elif len(result) > len(ans):
-            result = np.delete(result, np.s_[len(ans):], axis=0)
-        return np.sum((ans - result) ** 2)
+        v[:, 0] += fx * self.dt
+        v[:, 1] += fy * self.dt
 
-    def __SSD_repul_m(self, trial):
-        # 人と壁の間の反発力に関するパラメータを推定するときの目的関数SSDの実装
-        repul_m_arg1 = trial.suggest_uniform("arg1_of_repul_m", self.repul_m_range[0][0], self.repul_m_range[0][1])
-        repul_m_arg2 = trial.suggest_uniform("arg2_of_repul_m", self.repul_m_range[1][0], self.repul_m_range[1][1])
-        # "disrupt_point"を与えられた人流データの長さ分にする
-        model = simulation.people_flow(self.people_num, self.v_arg, self.repul_h, [repul_m_arg1, repul_m_arg2], self.target,
-                                self.R, self.min_p,
-                                self.p_arg, self.wall_x, self.wall_y, self.in_target_d, self.dt,
-                                len(self.maps) * self.save_params[1] + 1,
-                                self.save_format, self.save_params)
-        result = model.simulate()
-        result = np.asarray(result)
-        ans = self.maps.copy()
-        # ヒートマップの時間方向の長さが一致しないとき、後方の長い部分を切り捨てる
-        if len(ans) > len(result):
-            ans = np.delete(ans, np.s_[len(result):], axis=0)
-        elif len(result) > len(ans):
-            result = np.delete(result, np.s_[len(ans):], axis=0)
-        return np.sum((ans - result) ** 2)
+        '''下記のコードにて、目的地計算式でx座標を考慮せず、y座標のみを用いた距離計算でok-修正済'''
+        # 目的地と人の間の距離を計算
+        target_d = (self.target[target_num, 1] - x[:, 1])
+        for i in range(len(x)):
+            if not on_paint[i]:
+                continue
+            # 目的地が出口であればそのまま続ける
+            if target_num[i] == len(self.target) - 1:
+                continue
 
-    def __SSD_p(self, trial):
-        # 次の目的地に移動する確率に関するパラメータを推定するときの目的関数SSDの実装
-        p_ave = trial.suggest_uniform("average_of_p", self.p_range[0][0], self.p_range[0][1])
-        p_sd = trial.suggest_uniform("standard_deviation_of_p", self.p_range[1][0], self.p_range[1][1])
-        # "disrupt_point"を与えられた人流データの長さ分にする
-        model = simulation.people_flow(self.people_num, self.v_arg, self.repul_h, self.repul_m, self.target, self.R,
-                                self.min_p,
-                                [[p_ave, p_sd]], self.wall_x, self.wall_y, self.in_target_d, self.dt,
-                                len(self.maps) * self.save_params[1] + 1,
-                                self.save_format, self.save_params)
-        result = model.simulate()
-        result = np.asarray(result)
-        ans = self.maps.copy()
-        # ヒートマップの時間方向の長さが一致しないとき、後方の長い部分を切り捨てる
-        if len(ans) > len(result):
-            ans = np.delete(ans, np.s_[len(result):], axis=0)
-        elif len(result) > len(ans):
-            result = np.delete(result, np.s_[len(ans):], axis=0)
-        return np.sum((ans - result) ** 2)
+            # 目的地との距離が"in_target_d"より近ければ到着したと見なす
+            if target_d[i] < self.in_target_d:
+                in_target[i] = True
 
-    def __SAD_v(self, trial):
-        # 速さに関するパラメータを推定するときの目的関数SADの実装
-        v_ave = trial.suggest_uniform("average_of_v", self.v_range[0][0], self.v_range[0][1])
-        v_sd = trial.suggest_uniform("standard_deviation_of_v", self.v_range[1][0], self.v_range[1][1])
-        # "disrupt_point"を与えられた人流データの長さ分にする
-        model = simulation.people_flow(self.people_num, [v_ave, v_sd], self.repul_h, self.repul_m, self.target, self.R,
-                                self.min_p,
-                                self.p_arg, self.wall_x, self.wall_y, self.in_target_d, self.dt,
-                                len(self.maps) * self.save_params[1] + 1,
-                                self.save_format, self.save_params)
-        result = model.simulate()
-        result = np.asarray(result)
-        ans = self.maps.copy()
-        # ヒートマップの時間方向の長さが一致しないとき、後方の長い部分を切り捨てる
-        if len(ans) > len(result):
-            ans = np.delete(ans, np.s_[len(result):], axis=0)
-        elif len(result) > len(ans):
-            result = np.delete(result, np.s_[len(ans):], axis=0)
-        return np.sum(abs(ans - result))
+            if in_target[i]:
+                stay_target[i] += self.dt
+                # 滞在時間の期待値が過ぎれば次の目的地に進む
+                if stay_target[i] > (1 / p[i, target_num[i]]):
+                    target_num[i] += 1
+                    in_target[i] = False
+                    stay_target[i] = 0.0
+                # 滞在時間が過ぎる前に遠ざかったら、また近づくようにする
+                if target_d[i] > self.in_target_d:
+                    in_target[i] = False
 
-    def __SAD_repul_h(self, trial):
-        # 人の間の反発力に関するパラメータを推定するときの目的関数SADの実装
-        repul_h_arg1 = trial.suggest_uniform("arg1_of_repul_h", self.repul_h_range[0][0], self.repul_h_range[0][1])
-        repul_h_arg2 = trial.suggest_uniform("arg2_of_repul_h", self.repul_h_range[1][0], self.repul_h_range[1][1])
-        # "disrupt_point"を与えられた人流データの長さ分にする
-        model = simulation.people_flow(self.people_num, self.v_arg, [repul_h_arg1, repul_h_arg2], self.repul_m, self.target,
-                                self.R, self.min_p,
-                                self.p_arg, self.wall_x, self.wall_y, self.in_target_d, self.dt,
-                                len(self.maps) * self.save_params[1] + 1,
-                                self.save_format, self.save_params)
-        result = model.simulate()
-        result = np.asarray(result)
-        ans = self.maps.copy()
-        # ヒートマップの時間方向の長さが一致しないとき、後方の長い部分を切り捨てる
-        if len(ans) > len(result):
-            ans = np.delete(ans, np.s_[len(result):], axis=0)
-        elif len(result) > len(ans):
-            result = np.delete(result, np.s_[len(ans):], axis=0)
-        return np.sum(abs(ans - result))
+        return x, v, target_num, in_target, stay_target
 
-    def __SAD_repul_m(self, trial):
-        # 人と壁の間の反発力に関するパラメータを推定するときの目的関数SADの実装
-        repul_m_arg1 = trial.suggest_uniform("arg1_of_repul_m", self.repul_m_range[0][0], self.repul_m_range[0][1])
-        repul_m_arg2 = trial.suggest_uniform("arg2_of_repul_m", self.repul_m_range[1][0], self.repul_m_range[1][1])
-        # "disrupt_point"を与えられた人流データの長さ分にする
-        model = simulation.people_flow(self.people_num, self.v_arg, self.repul_h, [repul_m_arg1, repul_m_arg2], self.target,
-                                self.R, self.min_p,
-                                self.p_arg, self.wall_x, self.wall_y, self.in_target_d, self.dt,
-                                len(self.maps) * self.save_params[1] + 1,
-                                self.save_format, self.save_params)
-        result = model.simulate()
-        result = np.asarray(result)
-        ans = self.maps.copy()
-        # ヒートマップの時間方向の長さが一致しないとき、後方の長い部分を切り捨てる
-        if len(ans) > len(result):
-            ans = np.delete(ans, np.s_[len(result):], axis=0)
-        elif len(result) > len(ans):
-            result = np.delete(result, np.s_[len(ans):], axis=0)
-        return np.sum(abs(ans - result))
+    def __initialize(self):
+        '''
+        シミュレーションに使う変数を初期化する
+        '''
+        x = list()
+        v_opt = list()
+        v = list()
+        p = list()
+        target_num = list()
+        in_target = list()
+        stay_target = list()
+        on_paint = list()
+        for i in range(self.people_num):
+            # 入口を広めにして、スタート位置はランダムにする
+            x.append([(self.wall_x * 0.1) * np.random.rand() + self.wall_x * 0.45, self.wall_y])
+            v_opt.append(abs(np.random.normal(loc=self.v_arg[0], scale=self.v_arg[1])))
+            v.append([0, -v_opt[i]])
 
-    def __SAD_p(self, trial):
-        # 次の目的地に移動する確率に関するパラメータを推定するときの目的関数SADの実装
-        p_ave = trial.suggest_uniform("average_of_p", self.p_range[0][0], self.p_range[0][1])
-        p_sd = trial.suggest_uniform("standard_deviation_of_p", self.p_range[1][0], self.p_range[1][1])
-        # "disrupt_point"を与えられた人流データの長さ分にする
-        model = simulation.people_flow(self.people_num, self.v_arg, self.repul_h, self.repul_m, self.target, self.R,
-                                self.min_p,
-                                [[p_ave, p_sd]], self.wall_x, self.wall_y, self.in_target_d, self.dt,
-                                len(self.maps) * self.save_params[1] + 1,
-                                self.save_format, self.save_params)
-        result = model.simulate()
-        result = np.asarray(result)
-        ans = self.maps.copy()
-        # ヒートマップの時間方向の長さが一致しないとき、後方の長い部分を切り捨てる
-        if len(ans) > len(result):
-            ans = np.delete(ans, np.s_[len(result):], axis=0)
-        elif len(result) > len(ans):
-            result = np.delete(result, np.s_[len(ans):], axis=0)
-        return np.sum(abs(ans - result))
+            p_target = list()
+            for k in range(len(self.p_arg)):
+                for m in range((len(self.target) - 1) // len(self.p_arg)):
+                    p_candidate = np.random.normal(loc=self.p_arg[k][0], scale=self.p_arg[k][1])
+                    # 次の目的地に移動する確率が"min_p"より小さかったり1より大きかったりしたらその値にする
+                    if p_candidate < self.min_p:
+                        p_candidate = self.min_p
+                    elif p_candidate > 1:
+                        p_candidate = 1
+                    p_target.append(p_candidate)
+            p_target.append(self.min_p)
+            p.append(p_target)
 
-    def __KL_v(self, trial):
-        # 速さに関するパラメータを推定するときの目的関数KLの実装
-        v_ave = trial.suggest_uniform("average_of_v", self.v_range[0][0], self.v_range[0][1])
-        v_sd = trial.suggest_uniform("standard_deviation_of_v", self.v_range[1][0], self.v_range[1][1])
-        # "disrupt_point"を与えられた人流データの長さ分にする
-        model = simulation.people_flow(self.people_num, [v_ave, v_sd], self.repul_h, self.repul_m, self.target, self.R,
-                                self.min_p,
-                                self.p_arg, self.wall_x, self.wall_y, self.in_target_d, self.dt,
-                                len(self.maps) * self.save_params[1] + 1,
-                                self.save_format, self.save_params)
-        result = model.simulate()
-        result = np.asarray(result)
-        ans = self.maps.copy()
-        result /= np.sum(result, axis=(1, 2)).reshape((len(result), 1, 1))
-        # 0除算によりnanになっていたらその部分を除く
-        if np.isnan(np.sum(result)):
-            result = result[~np.isnan(result)].reshape((-1, 30, 30))
-        ans /= np.sum(ans, axis=(1, 2)).reshape((len(ans), 1, 1))
-        # ヒートマップの時間方向の長さが一致しないとき、後方の長い部分を切り捨てる
-        if len(ans) > len(result):
-            ans = np.delete(ans, np.s_[len(result):], axis=0)
-        elif len(result) > len(ans):
-            result = np.delete(result, np.s_[len(ans):], axis=0)
-        # 0除算を防ぐための微小な値
-        epsilon = 0.001
-        return np.sum(result * np.log((result + epsilon) / (ans + epsilon)))
+            target_num.append(0)
+            in_target.append(False)
+            stay_target.append(0.0)
+            on_paint.append(False)
 
-    def __KL_repul_h(self, trial):
-        # 人の間の反発力に関するパラメータを推定するときの目的関数KLの実装
-        repul_h_arg1 = trial.suggest_uniform("arg1_of_repul_h", self.repul_h_range[0][0], self.repul_h_range[0][1])
-        repul_h_arg2 = trial.suggest_uniform("arg2_of_repul_h", self.repul_h_range[1][0], self.repul_h_range[1][1])
-        # "disrupt_point"を与えられた人流データの長さ分にする
-        model = simulation.people_flow(self.people_num, self.v_arg, [repul_h_arg1, repul_h_arg2], self.repul_m, self.target,
-                                self.R, self.min_p,
-                                self.p_arg, self.wall_x, self.wall_y, self.in_target_d, self.dt,
-                                len(self.maps) * self.save_params[1] + 1,
-                                self.save_format, self.save_params)
-        result = model.simulate()
-        result = np.asarray(result)
-        ans = self.maps.copy()
-        result /= np.sum(result, axis=(1, 2)).reshape((len(result), 1, 1))
-        # 0除算によりnanになっていたらその部分を除く
-        if np.isnan(np.sum(result)):
-            result = result[~np.isnan(result)].reshape((-1, 30, 30))
-        ans /= np.sum(ans, axis=(1, 2)).reshape((len(ans), 1, 1))
-        # ヒートマップの時間方向の長さが一致しないとき、後方の長い部分を切り捨てる
-        if len(ans) > len(result):
-            ans = np.delete(ans, np.s_[len(result):], axis=0)
-        elif len(result) > len(ans):
-            result = np.delete(result, np.s_[len(ans):], axis=0)
-        # 0除算を防ぐための微小な値
-        epsilon = 0.001
-        return np.sum(result * np.log((result + epsilon) / (ans + epsilon)))
+        # numpy.ndarrayにする
+        x = np.asarray(x)
+        v_opt = np.asarray(v_opt)
+        v = np.asarray(v)
+        p = np.asarray(p)
+        target_num = np.asarray(target_num, dtype=int)
+        in_target = np.asarray(in_target)
+        stay_target = np.asarray(stay_target)
+        on_paint = np.asarray(on_paint, dtype=bool)
+        return x, v_opt, v, p, target_num, in_target, stay_target, on_paint
 
-    def __KL_repul_m(self, trial):
-        # 人と壁の間の反発力に関するパラメータを推定するときの目的関数KLの実装
-        repul_m_arg1 = trial.suggest_uniform("arg1_of_repul_m", self.repul_m_range[0][0], self.repul_m_range[0][1])
-        repul_m_arg2 = trial.suggest_uniform("arg2_of_repul_m", self.repul_m_range[1][0], self.repul_m_range[1][1])
-        # "disrupt_point"を与えられた人流データの長さ分にする
-        model = simulation.people_flow(self.people_num, self.v_arg, self.repul_h, [repul_m_arg1, repul_m_arg2], self.target,
-                                self.R, self.min_p,
-                                self.p_arg, self.wall_x, self.wall_y, self.in_target_d, self.dt,
-                                len(self.maps) * self.save_params[1] + 1,
-                                self.save_format, self.save_params)
-        result = model.simulate()
-        result = np.asarray(result)
-        ans = self.maps.copy()
-        result = result / np.sum(result, axis=(1, 2)).reshape((len(result), 1, 1))
-        # 0除算によりnanになっていたらその部分を除く
-        if np.isnan(np.sum(result)):
-            result = result[~np.isnan(result)].reshape((-1, 30, 30))
-        ans /= np.sum(ans, axis=(1, 2)).reshape((len(ans), 1, 1))
-        # ヒートマップの時間方向の長さが一致しないとき、後方の長い部分を切り捨てる
-        if len(ans) > len(result):
-            ans = np.delete(ans, np.s_[len(result):], axis=0)
-        elif len(result) > len(ans):
-            result = np.delete(result, np.s_[len(ans):], axis=0)
-        # 0除算を防ぐための微小な値
-        epsilon = 0.001
-        return np.sum(result * np.log((result + epsilon) / (ans + epsilon)))
+    def __start_paint(self, x, on_paint):
+        '''
+        入口が混んでいなければ入場を許可
+        '''
+        tenth_started = False
+        for i in range(len(x)):
+            if x[i, 1] == self.wall_y and on_paint[i] == False:
+                for k in range(len(x)):
+                    if on_paint[k] == True:
+                        if np.abs(x[i, 0] - x[k, 0]) < self.R * 0.2 or np.abs(x[i, 1] - x[k, 1]) < self.R * 0.3: 
+                            break
+                        ''' 0.5 -> 1.5   0.5-> 2.0'''
+                    if k == len(x) - 1:
+                        on_paint[i] = True
+           
+        #10人目が入場したタイミングを知らせる
+        tenth_started = any(on_paint[i] for i in range(9, 49))
 
-    def __KL_p(self, trial):
-        # 次の目的地に移動する確率に関するパラメータを推定するときの目的関数KLの実装
-        p_ave = trial.suggest_uniform("average_of_p", self.p_range[0][0], self.p_range[0][1])
-        p_sd = trial.suggest_uniform("standard_deviation_of_p", self.p_range[1][0], self.p_range[1][1])
-        # "disrupt_point"を与えられた人流データの長さ分にする
-        model = simulation.people_flow(self.people_num, self.v_arg, self.repul_h, self.repul_m, self.target, self.R,
-                                self.min_p,
-                                [[p_ave, p_sd]], self.wall_x, self.wall_y, self.in_target_d, self.dt,
-                                len(self.maps) * self.save_params[1] + 1,
-                                self.save_format, self.save_params)
-        result = model.simulate()
-        result = np.asarray(result)
-        ans = self.maps.copy()
-        result = result / np.sum(result, axis=(1, 2)).reshape((len(result), 1, 1))
-        # 0除算によりnanになっていたらその部分を除く
-        if np.isnan(np.sum(result)):
-            result = result[~np.isnan(result)].reshape((-1, 30, 30))
-        ans /= np.sum(ans, axis=(1, 2)).reshape((len(ans), 1, 1))
-        # ヒートマップの時間方向の長さが一致しないとき、後方の長い部分を切り捨てる
-        if len(ans) > len(result):
-            ans = np.delete(ans, np.s_[len(result):], axis=0)
-        elif len(result) > len(ans):
-            result = np.delete(result, np.s_[len(ans):], axis=0)
-        # 0除算を防ぐための微小な値
-        epsilon = 0.001
-        return np.sum(result * np.log((result + epsilon) / (ans + epsilon)))
+        return on_paint, tenth_started
 
-    def __ZNCC_v(self, trial):
-        # 速さに関するパラメータを推定するときの目的関数ZNCCの実装
-        v_ave = trial.suggest_uniform("average_of_v", self.v_range[0][0], self.v_range[0][1])
-        v_sd = trial.suggest_uniform("standard_deviation_of_v", self.v_range[1][0], self.v_range[1][1])
-        # "disrupt_point"を与えられた人流データの長さ分にする
-        model = simulation.people_flow(self.people_num, [v_ave, v_sd], self.repul_h, self.repul_m, self.target, self.R,
-                                self.min_p,
-                                self.p_arg, self.wall_x, self.wall_y, self.in_target_d, self.dt,
-                                len(self.maps) * self.save_params[1] + 1,
-                                self.save_format, self.save_params)
-        result = model.simulate()
-        result = np.asarray(result)
-        ans = self.maps.copy()
-        ans = np.asarray(ans)
-        # ヒートマップの時間方向の長さが一致しないとき、後方の長い部分を切り捨てる
-        if len(ans) > len(result):
-            ans = np.delete(ans, np.s_[len(result):], axis=0)
-        elif len(result) > len(ans):
-            result = np.delete(result, np.s_[len(ans):], axis=0)
-        result -= np.sum(result, axis=(1, 2)).reshape((len(result), 1, 1)) / (result.shape[1] * result.shape[2])
-        ans -= np.sum(ans, axis=(1, 2)).reshape((len(ans), 1, 1)) / (ans.shape[1] * ans.shape[2])
-        numerator = np.sum(result * ans, axis=(1, 2))
-        denominator1 = np.sqrt(np.sum(result ** 2, axis=(1, 2)))
-        denominator2 = np.sqrt(np.sum(ans ** 2, axis=(1, 2)))
-        # 0除算を防ぐための微小な値
-        epsilon = 0.001
-        return np.sum(numerator / (denominator1 * denominator2 + epsilon))
+    def __judge_end(self, x, target_num, on_paint):
+        '''
+        出口に着いたら描画や計算をやめる
+        '''
+        target_d = np.sqrt((self.target[-1, 0] - x[:, 0]) ** 2
+                           + (self.target[-1, 1] - x[:, 1]) ** 2)
+        for i in range(len(x)):
+            if target_d[i] < self.in_target_d and target_num[i] == len(self.target) - 1:
+                on_paint[i] = False
 
-    def __ZNCC_repul_h(self, trial):
-        # 人の間の反発力に関するパラメータを推定するときの目的関数ZNCCの実装
-        repul_h_arg1 = trial.suggest_uniform("arg1_of_repul_h", self.repul_h_range[0][0], self.repul_h_range[0][1])
-        repul_h_arg2 = trial.suggest_uniform("arg2_of_repul_h", self.repul_h_range[1][0], self.repul_h_range[1][1])
-        # "disrupt_point"を与えられた人流データの長さ分にする
-        model = simulation.people_flow(self.people_num, self.v_arg, [repul_h_arg1, repul_h_arg2], self.repul_m, self.target,
-                                self.R, self.min_p,
-                                self.p_arg, self.wall_x, self.wall_y, self.in_target_d, self.dt,
-                                len(self.maps) * self.save_params[1] + 1,
-                                self.save_format, self.save_params)
-        result = model.simulate()
-        result = np.asarray(result)
-        ans = self.maps.copy()
-        ans = np.asarray(ans)
-        # ヒートマップの時間方向の長さが一致しないとき、後方の長い部分を切り捨てる
-        if len(ans) > len(result):
-            ans = np.delete(ans, np.s_[len(result):], axis=0)
-        elif len(result) > len(ans):
-            result = np.delete(result, np.s_[len(ans):], axis=0)
-        result -= np.sum(result, axis=(1, 2)).reshape((len(result), 1, 1)) / (result.shape[1] * result.shape[2])
-        ans -= np.sum(ans, axis=(1, 2)).reshape((len(ans), 1, 1)) / (ans.shape[1] * ans.shape[2])
-        numerator = np.sum(result * ans, axis=(1, 2))
-        denominator1 = np.sqrt(np.sum(result ** 2, axis=(1, 2)))
-        denominator2 = np.sqrt(np.sum(ans ** 2, axis=(1, 2)))
-        # 0除算を防ぐための微小な値
-        epsilon = 0.001
-        return np.sum(numerator / (denominator1 * denominator2 + epsilon))
+        end_flag = False
+        fiftieth_exited = False
 
-    def __ZNCC_repul_m(self, trial):
-        # 人と壁の間の反発力に関するパラメータを推定するときの目的関数ZNCCの実装
-        repul_m_arg1 = trial.suggest_uniform("arg1_of_repul_m", self.repul_m_range[0][0], self.repul_m_range[0][1])
-        repul_m_arg2 = trial.suggest_uniform("arg2_of_repul_m", self.repul_m_range[1][0], self.repul_m_range[1][1])
-        # "disrupt_point"を与えられた人流データの長さ分にする
-        model = simulation.people_flow(self.people_num, self.v_arg, self.repul_h, [repul_m_arg1, repul_m_arg2], self.target,
-                                self.R, self.min_p,
-                                self.p_arg, self.wall_x, self.wall_y, self.in_target_d, self.dt,
-                                len(self.maps) * self.save_params[1] + 1,
-                                self.save_format, self.save_params)
-        result = model.simulate()
-        result = np.asarray(result)
-        ans = self.maps.copy()
-        ans = np.asarray(ans)
-        # ヒートマップの時間方向の長さが一致しないとき、後方の長い部分を切り捨てる
-        if len(ans) > len(result):
-            ans = np.delete(ans, np.s_[len(result):], axis=0)
-        elif len(result) > len(ans):
-            result = np.delete(result, np.s_[len(ans):], axis=0)
-        result -= np.sum(result, axis=(1, 2)).reshape((len(result), 1, 1)) / (result.shape[1] * result.shape[2])
-        ans -= np.sum(ans, axis=(1, 2)).reshape((len(ans), 1, 1)) / (ans.shape[1] * ans.shape[2])
-        numerator = np.sum(result * ans, axis=(1, 2))
-        denominator1 = np.sqrt(np.sum(result ** 2, axis=(1, 2)))
-        denominator2 = np.sqrt(np.sum(ans ** 2, axis=(1, 2)))
-        # 0除算を防ぐための微小な値
-        epsilon = 0.001
-        return np.sum(numerator / (denominator1 * denominator2 + epsilon))
+        if np.sum(on_paint) == 0:
+            end_flag = True
+        
+        # 50人目の計測が終了したタイミングを知らせる
+        if len(on_paint) >= 1 and on_paint[10] == False:
+            fiftieth_exited = True
 
-    def __ZNCC_p(self, trial):
-        # 次の目的地に移動する確率に関するパラメータを推定するときの目的関数ZNCCの実装
-        p_ave = trial.suggest_uniform("average_of_p", self.p_range[0][0], self.p_range[0][1])
-        p_sd = trial.suggest_uniform("standard_deviation_of_p", self.p_range[1][0], self.p_range[1][1])
-        # "disrupt_point"を与えられた人流データの長さ分にする
-        model = simulation.people_flow(self.people_num, self.v_arg, self.repul_h, self.repul_m, self.target, self.R,
-                                self.min_p,
-                                [[p_ave, p_sd]], self.wall_x, self.wall_y, self.in_target_d, self.dt,
-                                len(self.maps) * self.save_params[1] + 1,
-                                self.save_format, self.save_params)
-        result = model.simulate()
-        result = np.asarray(result)
-        ans = self.maps.copy()
-        ans = np.asarray(ans)
-        # ヒートマップの時間方向の長さが一致しないとき、後方の長い部分を切り捨てる
-        if len(ans) > len(result):
-            ans = np.delete(ans, np.s_[len(result):], axis=0)
-        elif len(result) > len(ans):
-            result = np.delete(result, np.s_[len(ans):], axis=0)
-        result -= np.sum(result, axis=(1, 2)).reshape((len(result), 1, 1)) / (result.shape[1] * result.shape[2])
-        ans -= np.sum(ans, axis=(1, 2)).reshape((len(ans), 1, 1)) / (ans.shape[1] * ans.shape[2])
-        numerator = np.sum(result * ans, axis=(1, 2))
-        denominator1 = np.sqrt(np.sum(result ** 2, axis=(1, 2)))
-        denominator2 = np.sqrt(np.sum(ans ** 2, axis=(1, 2)))
-        # 0除算を防ぐための微小な値
-        epsilon = 0.001
-        return np.sum(numerator / (denominator1 * denominator2 + epsilon))
+        return on_paint, end_flag, fiftieth_exited
 
-    def __optimize(self, objective, n_trials, name):
-        # 推定パラメータを最適化する
-        sampler = optuna.samplers.CmaEsSampler()
-        self.study[name] = optuna.create_study(sampler=sampler)
-        self.study[name].optimize(objective, n_trials=n_trials)
+    def __paint(self, x, target, on_paint):
+        '''
+        エリア内にいる人を描写
 
-    def paint_opt(self, name):
-        # 推定したパラメータの値と目的関数の値の関係、最適化回数とそれまでの最高の目的関数の値の関係をグラフ化
-        # 推定したパラメータの値を格納するリスト
-        x = dict()
-        # 目的関数の値を格納するリスト
-        y = list()
-        # それまでの最高の目的関数の値を格納するリスト
-        y_best = list()
-        # 各パラメータの値のリストを作る
-        for param_name in self.study[name].trials[0].params.keys():
-            x[param_name] = list()
-        for trial in self.study[name].trials:
-            for param_name, param in trial.params.items():
-                x[param_name].append(param)
-            y.append(trial.value)
-            y_best.append(np.min(y))
-        param_num = len(self.study[name].trials[0].params)
+        '''
+        ax = plt.axes()
+        plt.xlim(0, self.wall_x)
+        plt.ylim(0, self.wall_y)
+        for i in range(len(x)):
+            if not on_paint[i]:
+                continue
+            # 人の描画
+            particle = pt.Circle(xy=(x[i, 0], x[i, 1]), radius=self.R, fc='k', ec='k')
+            ax.add_patch(particle)
+        for i in range(len(target)):
+            if i < len(target) - 1:
+                # 目的地の描画
+                obj = pt.Rectangle(xy=(target[i, 0] - self.R, target[i, 1] - self.R), width=self.R * 2,
+                                   height=self.R * 2, fc='y', ec='y', fill=True)
+                ax.add_patch(obj)
+            else:
+                # 出口の描画
+                exit = pt.Rectangle(xy=(self.wall_x * 0.45, 0), width=self.wall_x * 0.1,
+                                height=self.wall_y * 0.01, fc='r', ec='r', fill=True)
+                ax.add_patch(exit)
+        # 入口の描画
+        entrance = pt.Rectangle(xy=(self.wall_x * 0.45, self.wall_y * 0.99), width=self.wall_x * 0.1,
+                                height=self.wall_y * 0.01, fc='r', ec='r', fill=True)
 
-        # 各グラフのサイズを(5,5)としてグラフ化
-        plt.figure(figsize=((param_num + 1) * 5, 5))
-        i = 1
-        for param_name in self.study[name].trials[0].params.keys():
-            ax = plt.subplot(1, param_num + 1, i)
-            ax.set_xlabel(param_name)
-            ax.set_ylabel('value')
-            ax.scatter(x[param_name], y)
-            i += 1
-        ax = plt.subplot(1, param_num + 1, param_num + 1)
-        ax.set_xlabel('trial')
-        ax.set_ylabel('best_value')
-        ax.plot(y_best)
+        ax.add_patch(entrance)
 
-    def set_study(self, name, path):
-        with open(path, 'rb') as f:
-            self.study[name] = pickle.load(f)
+        left_wall = pt.Rectangle(xy=(self.wall_x * 0.43, 0),width=self.wall_x * 0.01, height=self.wall_y,
+                                 fc='r', ec='r', fill=True)
+        
+        ax.add_patch(left_wall)
 
-    def save_opt(self, name):
-        # optunaのオブジェクトstudy(パラメータの最適化に関するデータを持つ)をピクル化して保存
-        filename = name + '.txt'
-        with open(filename, 'wb') as f:
-            pickle.dump(self.study[name], f)
+        right_wall = pt.Rectangle(xy=(self.wall_x * 0.56, 0),width=self.wall_x * 0.01, height=self.wall_y,
+                                  fc='r', ec='r', fill=True)
+        
+        ax.add_patch(right_wall)
+        ax.spines["top"].set_linewidth(1)
+        ax.spines["bottom"].set_linewidth(1)
+        ax.spines["left"].set_linewidth(1)
+        ax.spines["right"].set_linewidth(1)
+        ax.spines["top"].set_color("coral")
+        ax.spines["bottom"].set_color("coral")
+        ax.spines["left"].set_color("coral")
+        ax.spines["right"].set_color("coral")
+        ax.xaxis.set_visible(False)
+        ax.yaxis.set_visible(False)
+        ax.plot()
+        plt.pause(interval=0.01)
+        plt.gca().clear()
 
-    def whole_opt(self, infer_dict=None):
-        # すべてのパラメータを最適化する
-        if infer_dict is None:
-            infer_dict = {"v":"KL","repul_h":"ZNCC","repul_m":"SAD","p":"KL"}
+    def __heat_map(self, x, on_paint):
+        '''
+        ヒートマップを作成
+        '''
+        map = np.zeros(shape=(self.save_params[0][0], self.save_params[0][1]))
+        # 指定した行、列1つあたりのx,yの範囲を計算する
+        rough_x = self.wall_x / self.save_params[0][0]
+        rough_y = self.wall_y / self.save_params[0][1]
+        # 各人がヒートマップ上のどこにいるか計算する
+        location_x = (x[:, 0] // rough_x).astype(int)
+        location_y = (x[:, 1] // rough_y).astype(int)
+        for i in range(len(x)):
+            if on_paint[i]:
+                # 計算した場所が保存するヒートマップの範囲外であったら範囲内にする(一番端にいると範囲外になる)
+                if location_x[i] >= self.save_params[0][0]:
+                    location_x[i] = self.save_params[0][0] - 1
+                if location_x[i] < 0:
+                    location_x[i] = 0
+                if location_y[i] >= self.save_params[0][1]:
+                    location_y[i] = self.save_params[0][1] - 1
+                if location_y[i] < 0:
+                    location_y[i] = 0
+                map[location_x[i], location_y[i]] += 1
 
-        if "v" in infer_dict:
-            if infer_dict["v"] == "SSD":
-                self.__optimize(self.__SSD_v, self.n_trials, 'SSD_v')
-                self.paint_opt('SSD_v')
-                self.save_opt('SSD_v')
-            if infer_dict["v"] == "SAD":
-                self.__optimize(self.__SAD_v, self.n_trials, 'SAD_v')
-                self.paint_opt('SAD_v')
-                self.save_opt('SAD_v')
-            if infer_dict["v"] == "KL":
-                self.__optimize(self.__KL_v, self.n_trials, 'KL_v')
-                self.paint_opt('KL_v')
-                self.save_opt('KL_v')
-            if infer_dict["v"] == "ZNCC":
-                self.__optimize(self.__ZNCC_v, self.n_trials, 'ZNCC_v')
-                self.paint_opt('ZNCC_v')
-                self.save_opt('ZNCC_v')
-        if "repul_h" in infer_dict:
-            if infer_dict["repul_h"] == "SSD":
-                self.__optimize(self.__SSD_repul_h, self.n_trials, 'SSD_repul_h')
-                self.paint_opt('SSD_repul_h')
-                self.save_opt('SSD_repul_h')
-            if infer_dict["repul_h"] == "SAD":
-                self.__optimize(self.__SAD_repul_h, self.n_trials, 'SAD_repul_h')
-                self.paint_opt('SAD_repul_h')
-                self.save_opt('SAD_repul_h')
-            if infer_dict["repul_h"] == "KL":
-                self.__optimize(self.__KL_repul_h, self.n_trials, 'KL_repul_h')
-                self.paint_opt('KL_repul_h')
-                self.save_opt('KL_repul_h')
-            if infer_dict["repul_h"] == "ZNCC":
-                self.__optimize(self.__ZNCC_repul_h, self.n_trials, 'ZNCC_repul_h')
-                self.paint_opt('ZNCC_repul_h')
-                self.save_opt('ZNCC_repul_h')
-        if "repul_m" in infer_dict:
-            if infer_dict["repul_m"] == "SSD":
-                self.__optimize(self.__SSD_repul_m, self.n_trials, 'SSD_repul_m')
-                self.paint_opt('SSD_repul_m')
-                self.save_opt('SSD_repul_m')
-            if infer_dict["repul_m"] == "SAD":
-                self.__optimize(self.__SAD_repul_m, self.n_trials, 'SAD_repul_m')
-                self.paint_opt('SAD_repul_m')
-                self.save_opt('SAD_repul_m')
-            if infer_dict["repul_m"] == "KL":
-                self.__optimize(self.__KL_repul_m, self.n_trials, 'KL_repul_m')
-                self.paint_opt('KL_repul_m')
-                self.save_opt('KL_repul_m')
-            if infer_dict["repul_m"] == "ZNCC":
-                self.__optimize(self.__ZNCC_repul_m, self.n_trials, 'ZNCC_repul_m')
-                self.paint_opt('ZNCC_repul_m')
-                self.save_opt('ZNCC_repul_m')
-        if "p" in infer_dict:
-            if infer_dict["p"] == "SSD":
-                self.__optimize(self.__SSD_p, self.n_trials, 'SSD_p')
-                self.paint_opt('SSD_p')
-                self.save_opt('SSD_p')
-            if infer_dict["p"] == "SAD":
-                self.__optimize(self.__SAD_p, self.n_trials, 'SAD_p')
-                self.paint_opt('SAD_p')
-                self.save_opt('SAD_p')
-            if infer_dict["p"] == "KL":
-                self.__optimize(self.__KL_p, self.n_trials, 'KL_p')
-                self.paint_opt('KL_p')
-                self.save_opt('KL_p')
-            if infer_dict["p"] == "ZNCC":
-                self.__optimize(self.__ZNCC_p, self.n_trials, 'ZNCC_p')
-                self.paint_opt('ZNCC_p')
-                self.save_opt('ZNCC_p')
+        return map
 
-        inferred_params = dict()
-        if "v" in infer_dict:
-            inferred_params['average_of_v'] = self.study[infer_dict["v"]].best_params['averafe_of_v']
-            inferred_params['standard_deviation_of_v'] = self.study[infer_dict["v"]].best_params['standard_deviation_of_v']
-        if "repul_h" in infer_dict:
-            inferred_params['arg1_of_repul_h'] = self.study[infer_dict["repul_h"]].best_params['arg1_of_repul_h']
-            inferred_params['arg2_of_repul_h'] = self.study[infer_dict["repul_h"]].best_params['arg2_of_repul_h']
-        if "repul_m" in infer_dict:
-            inferred_params['arg1_of_repul_m'] = self.study[infer_dict["repul_m"]].best_params['arg1_of_repul_m']
-            inferred_params['arg2_of_repul_m'] = self.study[infer_dict["repul_m"]].best_params['arg2_of_repul_m']
-        if "p" in infer_dict:
-            inferred_params['average_of_p'] = self.study[infer_dict["p"]].best_params['averafe_of_p']
-            inferred_params['standard_deviation_of_p'] = self.study[infer_dict["p"]].best_params['standard_deviation_of_p']
+    def simulate(self):
+        '''
+        人流をシミュレーション
+        '''
+        # シミュレーションにかかった時間を記録
+        start = time.perf_counter()
+        x, v_opt, v, p, target_num, in_target, stay_target, on_paint = self.__initialize()
+        end_flag = False
+        steps = 0
+        counts = 0
+        total_time = 0
+        calucurate_time = 0
+        tenth_started = False
+        fiftieth_exited = False
 
-        return inferred_params
+        if self.save_format == "heat_map":
+            self.maps = list()
+            save_times = 0
+            passed_time = 0
+
+        while not end_flag:
+
+            x, v, target_num, in_target, stay_target = \
+                self.__calculate(x, v, v_opt, p, target_num,
+                                 self.target, in_target, stay_target, on_paint)
+
+            on_paint, tenth_started = self.__start_paint(x, on_paint)
+            on_paint, end_flag, fiftieth_exited = self.__judge_end(x, target_num, on_paint)
+            if self.save_format == "heat_map":
+                if passed_time > save_times * self.save_params[1]:
+                    self.maps.append(self.__heat_map(x, on_paint))
+                    save_times += 1
+                passed_time += self.dt
+
+            self.__paint(x, self.target, on_paint)
+
+            steps += 1
+
+            #10人目が入場してから50人目の計測が終わるまでの時間を計算する
+            if tenth_started and not fiftieth_exited:
+                counts += 1
+                
+            
+        # シミュレーションにかかった時間を計算
+
+        calucurate_time = counts * self.dt
+        total_time = steps * self.dt
+        # シミュレーションにかかった時間を記録
+        end = time.perf_counter()
+        
+        # かかった時間を出力
+        
+        print(str(fiftieth_exited))
+        print( " 総合時間 " + str(total_time) + "s" )
+        print( " 測定時間 " + str(calucurate_time) + str(counts)+ "s")
+        return self.maps if self.save_format == "heat_map" else None
