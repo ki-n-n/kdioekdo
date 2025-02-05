@@ -7,52 +7,12 @@ import time
 
 class people_flow():
     '''
-    このクラスでは、Social Force Model (SFM)を用いて、指定した人数の人々が入口から入って出口から出るまでをシミュレーションする。
+    Social Force Model (SFM)を用いて、指定した人数の人々が入口から入って出口から出るまでをシミュレーションする。
     
     '''
 
-    def __init__(self, people_num, v_arg, repul_h, repul_m, target, R,
-                 min_p, p_arg, wall_x, wall_y, in_target_d, dt, disrupt_point=None, save_format=None, save_params=None):
-        '''
-        入力された引数をプロパティに格納する。
-
-        people_num: シミュレーションする人数。
-
-        v_arg: 人の速さに関連する2つの要素を持つリスト型の変数。1つ目の要素は平均の速さ、2つ目の要素は速さの標準偏差を表す。
-
-        repul_h: 人の間の反発力に関連する2つの要素を持つリスト型の変数。
-        (詳細:人流シミュレーションのパラメータ推定手法(https://db-event.jpn.org/deim2017/papers/146.pdf)
-        3.人流シミュレーションモデル 3.1 Social Force Model)
-
-        repul_m: 人と壁の間の反発力に関連する2つの要素を持つリスト型の変数。
-        (詳細:人流シミュレーションのパラメータ推定手法(https://db-event.jpn.org/deim2017/papers/146.pdf)
-        3.人流シミュレーションモデル 3.1 Social Force Model)
-        
-        target: 形が(N,2)のリスト型の変数。Nは目的地の数。2次元目の要素は目的地のxy座標を表す。最後の目的地は出口と見なされる。
-        
-        R: 人(粒子として表される)の半径
-
-        min_p: 目的地にいる人が次の目的地に移動する確率の最小値。この確率の逆数が目的地での滞在時間の期待値として使われる。
-       
-    　　 p_arg: 目的地にいる人が次の目的地に移動する確率を決定する2次元のリスト型の変数。1次元目の要素数は目的地の数から1を引いた数の因数。
-        2次元目の1つ目の要素は確率の平均、2つ目の要素は標準偏差となる。この確率の逆数が目的地に滞在する時間の期待値として使われる。
-        なお、1次元目の要素数が目的地の数から1引いた数より小さいとき、numpyのようにブロードキャストしてしようされる。
-        
-        wall_x: 壁のx座標(左端は0であり右端がこの変数により決定される)
-        
-        wall_y: 壁のy座標(下端は0であり上端がこの変数により決定される)
-        
-        in_target_d: 人と目的地の間の距離がこの変数より小さければ、その人は目的地に到着したと見なす。)
-        
-        dt: 人の状態(位置、速さなど)を更新するときに利用する微小時間の大きさ
-        
-        disrupt_point: 経過時間がこの変数を超えたらシミュレーションを停止する。(シミュレーション1/dt回で経過時間の1単位となる)
-        
-        save_format: シミュレーション結果を保存する形式を指定する。現在は"heat_map"だけしか使えない。"None"であれば結果を保存しない。
-        
-        save_params: 結果を保存するのに使う変数。"heat_map"であれば2つの要素を持ったリスト型の変数が必要で、
-        1つ目の要素はヒートマップの行数と列数を指定するタプル、2つ目の要素は保存する頻度を指定する変数。頻度の単位は"disrupt_point"と同じ。
-        '''
+    def __init__(self, people_num, v_arg, cons_h, cons_w,cons_x, target, R,
+                 min_target, p_arg, wall_x, wall_y, in_target_d, dt, disrupt_point=None, save_format=None, save_params=None):
 
         try:
             self.people_num = people_num
@@ -61,18 +21,22 @@ class people_flow():
             if len(v_arg) != 2:
                 raise TypeError("The length of v_arg is mistaken.")
 
-            self.repul_h = np.asarray(repul_h)
-            if len(repul_h) != 2:
+            self.repul_h = np.asarray(cons_h)
+            if len(cons_h) != 2:
                 raise TypeError("The length of repul_h is mistaken.")
 
-            self.repul_m = np.asarray(repul_m)
-            if len(repul_m) != 2:
+            self.repul_m = np.asarray(cons_w)
+            if len(cons_w) != 2:
                 raise TypeError("The length of repul_m is mistaken.")
+            
+            self.rupul_n = np.asarray(cons_x)
+            if len(cons_x) != 2:
+                raise TypeError("the length of repul_n is mistaken.")
 
             self.target = np.asarray(target)
 
             self.R = R
-            self.min_p = min_p
+            self.min_p = min_target
 
             self.p_arg = p_arg
             if (len(self.target) - 1) % len(p_arg) != 0:
@@ -106,10 +70,6 @@ class people_flow():
             print(error)
 
     def __sincos(self, x1, x2, on_paint=True):
-        '''
-        sinθとcosθを計算する。θはx1とx2を結ぶ直線とx軸との角度。
-        Calculates sinθ and cosθ. Theta is the angle between x axis and a line between x1 and x2.
-        '''
 
         # x1,x2の組の個数が2以上かそうでないかで場合分けする
         if x1.ndim == 2:
@@ -140,16 +100,13 @@ class people_flow():
 
     def __force(self, x, v, v_opt, target_num, in_target, on_paint):
         '''
-        人に働く力を計算する
-        calculates force acting on people
+        人に働く力を計算
         '''
 
         sin, cos = self.__sincos(x, self.target[target_num], on_paint)
         fx = on_paint * (v_opt * cos - v[:, 0])
         fy = on_paint * (v_opt * sin - v[:, 1])
 
-        # 人の間に働く力を計算する
-        # calculate repulsion between people
         for i in range(len(x)):
             if not on_paint[i]:
                 continue
@@ -159,38 +116,66 @@ class people_flow():
             on_paint[i] = True
             r = np.sqrt((x[:, 0] - x[i, 0]) ** 2 + (x[:, 1] - x[i, 1]) ** 2)
             f_repul_h = self.repul_h[0] * (math.e ** (-r / self.repul_h[1]))
-            fx_repul_h = f_repul_h * cos
-            fy_repul_h = f_repul_h * sin
+            fx_repul_h = np.array(f_repul_h * cos)
+            fy_repul_h = np.array(f_repul_h * sin)
 
-            # 人から遠ざかる方向に反発力が働くのでマイナスにする
+            # 人から遠ざかる方向に反発力が働くのでマイナス
             fx[i] -= np.sum(fx_repul_h)
             fy[i] -= np.sum(fy_repul_h)
 
-        # 人と壁の間に働く力を計算する
-        # calculate repulsion between a person and walls
-        fx += self.repul_m[0] * (math.e ** (-x[:, 0] / self.repul_m[1]))
+        # 人と壁の間に働く力を計算
+        fx += self.repul_m[0] * (math.e ** (-(x[:, 0] - 135) / self.repul_m[1]))
         fx -= self.repul_m[0] * (math.e ** (-(165 - x[:, 0]) / self.repul_m[1]))
+
+        fy = np.array(fy, dtype=float)
+
+        safe_distance = 3
+        min_distance = 0
+
+        for i in range(len(fy)):
+            front_people = x[:, 1] > x[i, 1]
+            if np.any(front_people):
+                min_distance = float(np.min(x[front_people, 1]) - x[i, 1])
+            else:
+                min_distance = float('inf')
+        
+        if min_distance >= safe_distance:
+            tau = 0.5 #速度調整にかかる時間
+            lambda_n = self.rupul_n[1] #
+
+            if min_distance != float('inf'):
+                # 空間が開いているほど加速する関数（tanh を使用）
+                acceleration_factor = np.tanh(float(min_distance) / lambda_n)  
+
+                # 目標速度 v_opt に向かう加速度
+                desired_force = ((v_opt - float(v[i, 1])) / tau) * acceleration_factor
+
+                # y方向の力を加算
+                fy[i] += np.sum(desired_force)
+
+        # 上記の式を定数を変更しながらシミュレーションの結果を考察
 
         return fx, fy
 
     def __calculate(self, x, v, v_opt, p, target_num,
                     target, in_target, stay_target, on_paint):
         '''
-        人の状態を更新する
-        updates conditions of people
+        人の状態を更新
         '''
 
         # シミュレーションする場所にいない人は更新しない
-        # if a person is not on the area, it doesn't update
         x[:, 0] += on_paint * v[:, 0] * self.dt
         x[:, 1] += on_paint * v[:, 1] * self.dt
 
-        # 誤って壁の位置より飛び出ていたら壁の内側に戻す
+        # 誤って壁の位置より飛び出ていたら壁の内側に戻す 
+        '''
+        このコードを変更済
+        '''
         for i in range(len(x)):
-            if x[i, 0] > 165:
-                x[i, 0] = 165
-            if x[i, 0] < 145:
-                x[i, 0] = 145
+            if x[i, 0] > self.wall_x * 0.55:
+                x[i, 0] = self.wall_x * 0.55
+            if x[i, 0] < self.wall_x * 0.45:
+                x[i, 0] = self.wall_x * 0.45
             if x[i, 1] > self.wall_y:
                 x[i, 1] = self.wall_y
             if x[i, 1] < 0:
@@ -201,14 +186,13 @@ class people_flow():
         v[:, 0] += fx * self.dt
         v[:, 1] += fy * self.dt
 
-        # 目的地と人の間の距離を計算する
-        target_d = np.sqrt((self.target[target_num, 0] - x[:, 0]) ** 2
-                           + (self.target[target_num, 1] - x[:, 1]) ** 2)
+        '''下記のコードにて、目的地計算式でx座標を考慮せず、y座標のみを用いた距離計算でok-修正済'''
+        # 目的地と人の間の距離を計算
+        target_d = (self.target[target_num, 1] - x[:, 1])
         for i in range(len(x)):
             if not on_paint[i]:
                 continue
             # 目的地が出口であればそのまま続ける
-            # if people's target is the exit, they continue until they are out of range.
             if target_num[i] == len(self.target) - 1:
                 continue
 
@@ -232,7 +216,6 @@ class people_flow():
     def __initialize(self):
         '''
         シミュレーションに使う変数を初期化する
-        initializes parameters
         '''
         x = list()
         v_opt = list()
@@ -279,25 +262,26 @@ class people_flow():
 
     def __start_paint(self, x, on_paint):
         '''
-        入口が混んでいなければ入場を許可する
+        入口が混んでいなければ入場を許可
         '''
+        tenth_started = False
         for i in range(len(x)):
             if x[i, 1] == self.wall_y and on_paint[i] == False:
                 for k in range(len(x)):
                     if on_paint[k] == True:
-                        if np.abs(x[i, 0] - x[k, 0]) < self.R * 0.5 or np.abs(x[i, 1] - x[k, 1]) < self.R * 0.5: 
+                        if np.abs(x[i, 0] - x[k, 0]) < self.R * 0.2 or np.abs(x[i, 1] - x[k, 1]) < self.R * 0.3: 
                             break
                         ''' 0.5 -> 1.5   0.5-> 2.0'''
                     if k == len(x) - 1:
                         on_paint[i] = True
-        return on_paint
+        #10人目が入場したタイミングを知らせる
+        tenth_started = any(on_paint[i] for i in range(9, 49))
+          
+        return on_paint, tenth_started
 
     def __judge_end(self, x, target_num, on_paint):
         '''
         出口に着いたら描画や計算をやめる
-        全員出口に着いていなくなったら、シミュレーションを終了する
-        if people reach the exit, they are painted no longer
-        if all people are out of range, the model finishes to paint and the simulation ends
         '''
         target_d = np.sqrt((self.target[-1, 0] - x[:, 0]) ** 2
                            + (self.target[-1, 1] - x[:, 1]) ** 2)
@@ -306,17 +290,22 @@ class people_flow():
                 on_paint[i] = False
 
         end_flag = False
+        fiftieth_exited = False
+
         if np.sum(on_paint) == 0:
             end_flag = True
+        
+        # 50人目の計測が終了したタイミングを知らせる
+        if len(on_paint) >= 49 and on_paint[49] == False:
+            fiftieth_exited = True
 
-        return on_paint, end_flag
+        return on_paint, end_flag, fiftieth_exited
 
     def __paint(self, x, target, on_paint):
         '''
-        エリアにいる人を全員描画する
-        paints all people and targets on the area
+        エリア内にいる人を描写
+
         '''
-        exit = None
         ax = plt.axes()
         plt.xlim(0, self.wall_x)
         plt.ylim(0, self.wall_y)
@@ -324,7 +313,7 @@ class people_flow():
             if not on_paint[i]:
                 continue
             # 人の描画
-            particle = pt.Circle(xy=(x[i, 0], x[i, 1]), radius=self.R, fc='b', ec='b')
+            particle = pt.Circle(xy=(x[i, 0], x[i, 1]), radius=self.R, fc='k', ec='k')
             ax.add_patch(particle)
         for i in range(len(target)):
             if i < len(target) - 1:
@@ -335,8 +324,7 @@ class people_flow():
             else:
                 # 出口の描画
                 exit = pt.Rectangle(xy=(self.wall_x * 0.45, 0), width=self.wall_x * 0.1,
-                    height=self.wall_y * 0.01, fc='r', ec='r', fill=True)
-                
+                                height=self.wall_y * 0.01, fc='r', ec='r', fill=True)
                 ax.add_patch(exit)
         # 入口の描画
         entrance = pt.Rectangle(xy=(self.wall_x * 0.45, self.wall_y * 0.99), width=self.wall_x * 0.1,
@@ -344,13 +332,13 @@ class people_flow():
 
         ax.add_patch(entrance)
 
-        left_wall = pt.Rectangle(xy=(self.wall_x * 0.45, 0),width=self.wall_x * 0.01, height=self.wall_y,
-                                fc='r', ec='r', fill=True)
+        left_wall = pt.Rectangle(xy=(self.wall_x * 0.43, 0),width=self.wall_x * 0.01, height=self.wall_y,
+                                 fc='r', ec='r', fill=True)
         
         ax.add_patch(left_wall)
 
-        right_wall = pt.Rectangle(xy=(self.wall_x * 0.55, 0),width=self.wall_x * 0.01, height=self.wall_y,
-                                fc='r', ec='r', fill=True)
+        right_wall = pt.Rectangle(xy=(self.wall_x * 0.56, 0),width=self.wall_x * 0.01, height=self.wall_y,
+                                  fc='r', ec='r', fill=True)
         
         ax.add_patch(right_wall)
         ax.spines["top"].set_linewidth(1)
@@ -369,8 +357,7 @@ class people_flow():
 
     def __heat_map(self, x, on_paint):
         '''
-        各グリッドの中にいる人数を示すヒートマップを作る
-        make a heat map that shows the number of people in each grid
+        ヒートマップを作成
         '''
         map = np.zeros(shape=(self.save_params[0][0], self.save_params[0][1]))
         # 指定した行、列1つあたりのx,yの範囲を計算する
@@ -396,13 +383,19 @@ class people_flow():
 
     def simulate(self):
         '''
-        人流をシミュレーションする
-        simulates people's flow
+        人流をシミュレーション
         '''
-        # シミュレーションにかかった時間を記録する
+        # シミュレーションにかかった時間を記録
         start = time.perf_counter()
         x, v_opt, v, p, target_num, in_target, stay_target, on_paint = self.__initialize()
         end_flag = False
+        steps = 0
+        counts = 0
+        total_time = 0
+        calucurate_time = 0
+        tenth_started = False
+        fiftieth_exited = False
+
         if self.save_format == "heat_map":
             self.maps = list()
             save_times = 0
@@ -414,8 +407,8 @@ class people_flow():
                 self.__calculate(x, v, v_opt, p, target_num,
                                  self.target, in_target, stay_target, on_paint)
 
-            on_paint = self.__start_paint(x, on_paint)
-            on_paint, end_flag = self.__judge_end(x, target_num, on_paint)
+            on_paint, tenth_started = self.__start_paint(x, on_paint)
+            on_paint, end_flag, fiftieth_exited = self.__judge_end(x, target_num, on_paint)
             if self.save_format == "heat_map":
                 if passed_time > save_times * self.save_params[1]:
                     self.maps.append(self.__heat_map(x, on_paint))
@@ -424,13 +417,22 @@ class people_flow():
 
             self.__paint(x, self.target, on_paint)
 
-            # "disrupt_point"が指定されていたら、それを超えたときにシミュレーションを終了する
-            if self.disrupt_point and passed_time > self.disrupt_point:
-                print("The simulation was dirupted.")
-                break
+            steps += 1
 
+            #10人目が入場してから50人目の計測が終わるまでの時間を計算する
+            if tenth_started and not fiftieth_exited:
+                counts += 1
+                
+            
+        # シミュレーションにかかった時間を計算
+
+        calucurate_time = counts * self.dt
+        total_time = steps * self.dt
         # シミュレーションにかかった時間を記録
         end = time.perf_counter()
+        
         # かかった時間を出力
-        print("It took " + str(end - start) + " s.")
+        
+        print( " 総合時間 " + str(total_time) + "s" )
+        print( " 測定時間 " + str(calucurate_time) + str(counts)+ "s")
         return self.maps if self.save_format == "heat_map" else None
