@@ -126,8 +126,32 @@ class people_flow():
         # 人と壁の間に働く力を計算
         fx += self.repul_m[0] * (math.e ** (-(x[:, 0] - 135) / self.repul_m[1]))
         fx -= self.repul_m[0] * (math.e ** (-(165 - x[:, 0]) / self.repul_m[1]))
+
+        fy = np.array(fy, dtype=float)
+
+        safe_distance = 3
+        min_distance = 0
+
+        for i in range(len(fy)):
+            front_people = x[:, 1] > x[i, 1]
+            if np.any(front_people):
+                min_distance = float(np.min(x[front_people, 1]) - x[i, 1])
+            else:
+                min_distance = float('inf')
         
-        
+        if min_distance >= safe_distance:
+            tau = 0.5 #速度調整にかかる時間
+            lambda_n = self.rupul_n[1] #
+
+            if min_distance != float('inf'):
+                # 空間が開いているほど加速する関数（tanh を使用）
+                acceleration_factor = np.tanh(float(min_distance) / lambda_n)  
+
+                # 目標速度 v_opt に向かう加速度
+                desired_force = ((v_opt - float(v[i, 1])) / tau) * acceleration_factor
+
+                # y方向の力を加算
+                fy[i] += np.sum(desired_force)
 
         # 上記の式を定数を変更しながらシミュレーションの結果を考察
 
@@ -250,10 +274,9 @@ class people_flow():
                         ''' 0.5 -> 1.5   0.5-> 2.0'''
                     if k == len(x) - 1:
                         on_paint[i] = True
-           
         #10人目が入場したタイミングを知らせる
         tenth_started = any(on_paint[i] for i in range(9, 49))
-
+          
         return on_paint, tenth_started
 
     def __judge_end(self, x, target_num, on_paint):
@@ -273,7 +296,7 @@ class people_flow():
             end_flag = True
         
         # 50人目の計測が終了したタイミングを知らせる
-        if len(on_paint) >= 1 and on_paint[10] == False:
+        if len(on_paint) >= 49 and on_paint[49] == False:
             fiftieth_exited = True
 
         return on_paint, end_flag, fiftieth_exited
@@ -410,7 +433,6 @@ class people_flow():
         
         # かかった時間を出力
         
-        print(str(fiftieth_exited))
         print( " 総合時間 " + str(total_time) + "s" )
         print( " 測定時間 " + str(calucurate_time) + str(counts)+ "s")
         return self.maps if self.save_format == "heat_map" else None
