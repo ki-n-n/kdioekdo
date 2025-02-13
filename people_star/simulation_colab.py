@@ -319,7 +319,7 @@ class people_flow():
             if not on_paint[i]:
                 continue
             # 人の描画
-            color = 'r' if self.accelerated_people[i] else 'k'
+            color = 'b' if self.accelerated_people[i] else 'k'
             particle = pt.Circle(xy=(x[i, 0], x[i, 1]), radius=self.R, fc=color, ec=color)
             ax.add_patch(particle)
         for i in range(len(target)):
