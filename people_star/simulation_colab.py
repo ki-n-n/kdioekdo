@@ -134,7 +134,7 @@ class people_flow():
         safe_distance = 3
         min_distance = 0
 
-        for i in range(len(fy)):
+        for i in range(len(x)):
             front_people = x[:, 1] > x[i, 1]
             if np.any(front_people):
                 min_distance = float(np.min(x[front_people, 1]) - x[i, 1])
@@ -154,9 +154,10 @@ class people_flow():
 
                     # y方向の力を加算
                     fy[i] += np.sum(desired_force)
-                
-                
+        
                     self.accelerated_people[i] = True
+            else:
+                self.accelerated_people[i] = False    
 
 
         # 上記の式を定数を変更しながらシミュレーションの結果を考察
@@ -319,7 +320,9 @@ class people_flow():
             if not on_paint[i]:
                 continue
             # 人の描画
-            color = 'b' if self.accelerated_people[i] else 'k'
+            color = 'k'
+            if self.accelerated_people[i] == True:
+                color ='red'
             particle = pt.Circle(xy=(x[i, 0], x[i, 1]), radius=self.R, fc=color, ec=color)
             ax.add_patch(particle)
         for i in range(len(target)):
@@ -336,7 +339,6 @@ class people_flow():
         # 入口の描画
         entrance = pt.Rectangle(xy=(self.wall_x * 0.45, self.wall_y * 0.99), width=self.wall_x * 0.1,
                                 height=self.wall_y * 0.01, fc='r', ec='r', fill=True)
-
         ax.add_patch(entrance)
 
         left_wall = pt.Rectangle(xy=(self.wall_x * 0.43, 0),width=self.wall_x * 0.01, height=self.wall_y,
