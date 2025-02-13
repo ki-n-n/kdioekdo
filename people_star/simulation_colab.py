@@ -29,7 +29,7 @@ class people_flow():
             if len(cons_w) != 2:
                 raise TypeError("The length of repul_m is mistaken.")
             
-            self.rupul_n = np.asarray(cons_x)
+            self.repul_n = np.asarray(cons_x)
             if len(cons_x) != 2:
                 raise TypeError("the length of repul_n is mistaken.")
 
@@ -107,6 +107,8 @@ class people_flow():
         fx = on_paint * (v_opt * cos - v[:, 0])
         fy = on_paint * (v_opt * sin - v[:, 1])
 
+        self.accelerated_people = np.zeros(len(x), dtype=bool)
+
         for i in range(len(x)):
             if not on_paint[i]:
                 continue
@@ -139,19 +141,23 @@ class people_flow():
             else:
                 min_distance = float('inf')
         
-        if min_distance >= safe_distance:
-            tau = 0.3 #速度調整にかかる時間
-            lambda_n = 1 #
+            if min_distance >= safe_distance:
+                tau = 0.3 #速度調整にかかる時間
+                lambda_n = 1 #
 
-            if min_distance != float('inf'):
-                # 空間が開いているほど加速する関数（tanh を使用）
-                acceleration_factor = np.tanh(float(min_distance) / lambda_n)  
+                if min_distance != float('inf'):
+                    # 空間が開いているほど加速する関数（tanh を使用）
+                    acceleration_factor = np.tanh(float(min_distance) / lambda_n)  
 
-                # 目標速度 v_opt に向かう加速度
-                desired_force = ((v_opt - float(v[i, 1])) / tau) * acceleration_factor
+                    # 目標速度 v_opt に向かう加速度
+                    desired_force = ((v_opt - float(v[i, 1])) / tau) * acceleration_factor
 
-                # y方向の力を加算
-                fy[i] += np.sum(desired_force)
+                    # y方向の力を加算
+                    fy[i] += np.sum(desired_force)
+                
+                
+                    self.accelerated_people[i] = True
+
 
         # 上記の式を定数を変更しながらシミュレーションの結果を考察
 
@@ -313,7 +319,8 @@ class people_flow():
             if not on_paint[i]:
                 continue
             # 人の描画
-            particle = pt.Circle(xy=(x[i, 0], x[i, 1]), radius=self.R, fc='k', ec='k')
+            color = 'r' if self.accelerated_people[i] else 'k'
+            particle = pt.Circle(xy=(x[i, 0], x[i, 1]), radius=self.R, fc=color, ec=color)
             ax.add_patch(particle)
         for i in range(len(target)):
             if i < len(target) - 1:
