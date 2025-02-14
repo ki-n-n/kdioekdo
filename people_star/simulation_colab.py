@@ -142,7 +142,7 @@ class people_flow():
                 if i == j or not on_paint[j]:  # 自分自身 or 既に消えた人は無視
                     continue
             
-                in_sector, side = self.is_in_sector(x[i,0], x[i,1], x[j,0], x[j,1], self.angle[i], 20, math.radians(90))
+                in_sector, side = self.is_in_sector(x[i,0], x[i,1], x[j,0], x[j,1], self.angle[i], 5, math.radians(80))
             
                 if in_sector:
                     if side == "left":
