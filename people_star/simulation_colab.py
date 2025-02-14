@@ -360,8 +360,7 @@ class people_flow():
 
         '''
         ax = plt.axes()
-        plt.xlim(0, self.wall_x)
-        plt.ylim(0, self.wall_y)
+        
         for i in range(len(x)):
             if not on_paint[i]:
                 continue
