@@ -142,7 +142,7 @@ class people_flow():
                 if i == j or not on_paint[j]:  # 自分自身 or 既に消えた人は無視
                     continue
             
-                in_sector, side = self.is_in_sector(x[i,0], x[i,1], x[j,0], x[j,1], self.angle[i], 10, math.radians(80))
+                in_sector, side = self.is_in_sector(x[i,0], x[i,1], x[j,0], x[j,1], self.angle[i], 15, math.radians(80))
             
                 if in_sector:
                     if side == "left":
@@ -179,7 +179,7 @@ class people_flow():
 
                         # y方向の力を加算
                         fy[i] += np.sum(desired_force)
-            if left_clear and not right_clear and i >3:
+            elif left_clear and not right_clear and i >3:
                 
                 self.acceleration[i] = True
                 fy = np.array(fy, dtype=float)
@@ -207,7 +207,7 @@ class people_flow():
 
                         # y方向の力を加算
                         fy[i] += np.sum(desired_force) 
-            elif left_clear and right_clear and i > 3:
+            elif left_clear and right_clear and i > 4:
                 self.acceleration[i] = True
                 fy = np.array(fy, dtype=float)
 
