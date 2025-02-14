@@ -151,7 +151,7 @@ class people_flow():
                         right_clear = False
         
             # 条件に応じて加速や移動の方向を変える
-            if (left_clear or right_clear) and i >3:
+            if not left_clear and right_clear and i >3:
                 
                 self.acceleration[i] = True
                 fy = np.array(fy, dtype=float)
@@ -179,7 +179,62 @@ class people_flow():
 
                         # y方向の力を加算
                         fy[i] += np.sum(desired_force)
-                        
+            if left_clear and not right_clear and i >3:
+                
+                self.acceleration[i] = True
+                fy = np.array(fy, dtype=float)
+
+                safe_distance = 0
+                min_distance = 0
+
+                for i in range(len(fy)):
+                    front_people = x[:, 1] > x[i, 1]
+                    if np.any(front_people):
+                        min_distance = float(np.min(x[front_people, 1]) - x[i, 1])
+                    else:
+                        min_distance = float('inf')
+        
+                if min_distance >= safe_distance:
+                    tau = 0.3 #速度調整にかかる時間
+                    lambda_n = 1 #
+
+                    if min_distance != float('inf'):
+                        # 空間が開いているほど加速する関数（tanh を使用）
+                        acceleration_factor = np.tanh(float(min_distance) / lambda_n)  
+
+                        # 目標速度 v_opt に向かう加速度
+                        desired_force = ((v_opt - float(v[i, 1])) / tau) * acceleration_factor
+
+                        # y方向の力を加算
+                        fy[i] += np.sum(desired_force) 
+            elif left_clear and right_clear and i > 3:
+                self.acceleration[i] = True
+                fy = np.array(fy, dtype=float)
+
+                safe_distance = 0
+                min_distance = 0
+
+                for i in range(len(fy)):
+                    front_people = x[:, 1] > x[i, 1]
+                    if np.any(front_people):
+                        min_distance = float(np.min(x[front_people, 1]) - x[i, 1])
+                    else:
+                        min_distance = float('inf')
+        
+                if min_distance >= safe_distance:
+                    tau = 0.3 #速度調整にかかる時間
+                    lambda_n = 1 #
+
+                    if min_distance != float('inf'):
+                        # 空間が開いているほど加速する関数（tanh を使用）
+                        acceleration_factor = np.tanh(float(min_distance) / lambda_n)  
+
+                        # 目標速度 v_opt に向かう加速度
+                        desired_force = ((v_opt - float(v[i, 1])) / tau) * acceleration_factor
+
+                        # y方向の力を加算
+                        fy[i] += np.sum(desired_force)
+                           
             else:
                 self.acceleration[i] = False
                 
@@ -332,7 +387,7 @@ class people_flow():
           
         return on_paint, tenth_started
 
-    def __judge_end(self, x, target_num, on_paint):
+    def __judge_end(self, x, target_num, on_paint,counts):
         '''
         出口に着いたら描画や計算をやめる
         '''
@@ -344,13 +399,14 @@ class people_flow():
 
         end_flag = False
         fiftieth_exited = False
-
-        if np.sum(on_paint) == 0:
-            end_flag = True
         
         # 50人目の計測が終了したタイミングを知らせる
         if len(on_paint) >= 49 and on_paint[49] == False:
             fiftieth_exited = True
+
+
+        if np.sum(on_paint) ==0 :
+            end_flag = True    
 
         return on_paint, end_flag, fiftieth_exited
 
@@ -464,7 +520,7 @@ class people_flow():
                                  self.target, in_target, stay_target, on_paint)
 
             on_paint, tenth_started = self.__start_paint(x, on_paint)
-            on_paint, end_flag, fiftieth_exited = self.__judge_end(x, target_num, on_paint)
+            on_paint, end_flag, fiftieth_exited = self.__judge_end(x, target_num, on_paint,counts)
             if self.save_format == "heat_map":
                 if passed_time > save_times * self.save_params[1]:
                     self.maps.append(self.__heat_map(x, on_paint))
