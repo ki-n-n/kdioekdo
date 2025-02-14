@@ -29,14 +29,11 @@ class people_flow():
             if len(cons_w) != 2:
                 raise TypeError("The length of repul_m is mistaken.")
             
-            self.repul_n = np.asarray(cons_x)
+            self.rupul_n = np.asarray(cons_x)
             if len(cons_x) != 2:
                 raise TypeError("the length of repul_n is mistaken.")
 
             self.target = np.asarray(target)
-
-            self.acceleration = np.zeros(self.people_num, dtype=bool)
-            self.angle = np.zeros(self.people_num)
 
             self.R = R
             self.min_p = min_target
@@ -101,7 +98,6 @@ class people_flow():
                 cos = on_paint * (x2[0] - x1[0]) / r
                 return sin, cos
 
-
     def __force(self, x, v, v_opt, target_num, in_target, on_paint):
         '''
         人に働く力を計算
@@ -130,140 +126,12 @@ class people_flow():
         # 人と壁の間に働く力を計算
         fx += self.repul_m[0] * (math.e ** (-(x[:, 0] - 135) / self.repul_m[1]))
         fx -= self.repul_m[0] * (math.e ** (-(165 - x[:, 0]) / self.repul_m[1]))
-
-        for i in range(len(x)):
-            if not on_paint[i]:
-                continue  # 既に消えているならスキップ
         
-            left_clear = True  # 左側の扇形が空いているか
-            right_clear = True  # 右側の扇形が空いているか
         
-            for j in range(len(x)):  # 他のすべての人をチェック
-                if i == j or not on_paint[j]:  # 自分自身 or 既に消えた人は無視
-                    continue
-            
-                in_sector, side = self.is_in_sector(x[i,0], x[i,1], x[j,0], x[j,1], self.angle[i], 15, math.radians(80))
-            
-                if in_sector:
-                    if side == "left":
-                        left_clear = False
-                    elif side == "right":
-                        right_clear = False
-        
-            # 条件に応じて加速や移動の方向を変える
-            if not left_clear and right_clear and i >3:
-                
-                self.acceleration[i] = True
-                fy = np.array(fy, dtype=float)
-
-                safe_distance = 0
-                min_distance = 0
-
-                for i in range(len(fy)):
-                    front_people = x[:, 1] > x[i, 1]
-                    if np.any(front_people):
-                        min_distance = float(np.min(x[front_people, 1]) - x[i, 1])
-                    else:
-                        min_distance = float('inf')
-        
-                if min_distance >= safe_distance:
-                    tau = 0.3 #速度調整にかかる時間
-                    lambda_n = 1 #
-
-                    if min_distance != float('inf'):
-                        # 空間が開いているほど加速する関数（tanh を使用）
-                        acceleration_factor = np.tanh(float(min_distance) / lambda_n)  
-
-                        # 目標速度 v_opt に向かう加速度
-                        desired_force = ((v_opt - float(v[i, 1])) / tau) * acceleration_factor
-
-                        # y方向の力を加算
-                        fy[i] += np.sum(desired_force)
-            elif left_clear and not right_clear and i >3:
-                
-                self.acceleration[i] = True
-                fy = np.array(fy, dtype=float)
-
-                safe_distance = 0
-                min_distance = 0
-
-                for i in range(len(fy)):
-                    front_people = x[:, 1] > x[i, 1]
-                    if np.any(front_people):
-                        min_distance = float(np.min(x[front_people, 1]) - x[i, 1])
-                    else:
-                        min_distance = float('inf')
-        
-                if min_distance >= safe_distance:
-                    tau = 0.3 #速度調整にかかる時間
-                    lambda_n = 1 #
-
-                    if min_distance != float('inf'):
-                        # 空間が開いているほど加速する関数（tanh を使用）
-                        acceleration_factor = np.tanh(float(min_distance) / lambda_n)  
-
-                        # 目標速度 v_opt に向かう加速度
-                        desired_force = ((v_opt - float(v[i, 1])) / tau) * acceleration_factor
-
-                        # y方向の力を加算
-                        fy[i] += np.sum(desired_force) 
-            elif left_clear and right_clear and i > 4:
-                self.acceleration[i] = True
-                fy = np.array(fy, dtype=float)
-
-                safe_distance = 0
-                min_distance = 0
-
-                for i in range(len(fy)):
-                    front_people = x[:, 1] > x[i, 1]
-                    if np.any(front_people):
-                        min_distance = float(np.min(x[front_people, 1]) - x[i, 1])
-                    else:
-                        min_distance = float('inf')
-        
-                if min_distance >= safe_distance:
-                    tau = 0.3 #速度調整にかかる時間
-                    lambda_n = 1 #
-
-                    if min_distance != float('inf'):
-                        # 空間が開いているほど加速する関数（tanh を使用）
-                        acceleration_factor = np.tanh(float(min_distance) / lambda_n)  
-
-                        # 目標速度 v_opt に向かう加速度
-                        desired_force = ((v_opt - float(v[i, 1])) / tau) * acceleration_factor
-
-                        # y方向の力を加算
-                        fy[i] += np.sum(desired_force)
-                           
-            else:
-                self.acceleration[i] = False
-                
 
         # 上記の式を定数を変更しながらシミュレーションの結果を考察
 
         return fx, fy
-
-    def is_in_sector(self, self_x, self_y, other_x, other_y, self_angle, radius, theta):
-    
-    
-        dx = other_x - self_x
-        dy = other_y - self_y
-        distance = math.sqrt(dx**2 + dy**2)
-
-        if distance > radius:
-            return False, None  # 半径外なら対象外
-
-        angle_to_other = math.atan2(dy, dx)  # 他人の角度
-        angle_diff = (angle_to_other - self_angle + math.pi) % (2 * math.pi) - math.pi  # -π ~ π に正規化
-
-        if abs(angle_diff) <= theta:  # 扇形内にいる
-            if angle_diff > 0:
-                return True, "right"
-            else:
-                return True, "left"
-
-        return False, None
-
 
     def __calculate(self, x, v, v_opt, p, target_num,
                     target, in_target, stay_target, on_paint):
@@ -382,12 +250,13 @@ class people_flow():
                         ''' 0.5 -> 1.5   0.5-> 2.0'''
                     if k == len(x) - 1:
                         on_paint[i] = True
+           
         #10人目が入場したタイミングを知らせる
         tenth_started = any(on_paint[i] for i in range(9, 49))
-          
+
         return on_paint, tenth_started
 
-    def __judge_end(self, x, target_num, on_paint,counts):
+    def __judge_end(self, x, target_num, on_paint):
         '''
         出口に着いたら描画や計算をやめる
         '''
@@ -399,14 +268,13 @@ class people_flow():
 
         end_flag = False
         fiftieth_exited = False
+
+        if np.sum(on_paint) == 0:
+            end_flag = True
         
         # 50人目の計測が終了したタイミングを知らせる
-        if len(on_paint) >= 49 and on_paint[49] == False:
+        if len(on_paint) >= 1 and on_paint[10] == False:
             fiftieth_exited = True
-
-
-        if np.sum(on_paint) ==0 :
-            end_flag = True    
 
         return on_paint, end_flag, fiftieth_exited
 
@@ -422,10 +290,7 @@ class people_flow():
             if not on_paint[i]:
                 continue
             # 人の描画
-            if self.acceleration[i] == True:
-                particle = pt.Circle(xy=(x[i, 0], x[i, 1]), radius=self.R, fc='red', ec='red')
-            else:
-                particle = pt.Circle(xy=(x[i, 0], x[i, 1]), radius=self.R, fc='k', ec='k')
+            particle = pt.Circle(xy=(x[i, 0], x[i, 1]), radius=self.R, fc='k', ec='k')
             ax.add_patch(particle)
         for i in range(len(target)):
             if i < len(target) - 1:
@@ -520,7 +385,7 @@ class people_flow():
                                  self.target, in_target, stay_target, on_paint)
 
             on_paint, tenth_started = self.__start_paint(x, on_paint)
-            on_paint, end_flag, fiftieth_exited = self.__judge_end(x, target_num, on_paint,counts)
+            on_paint, end_flag, fiftieth_exited = self.__judge_end(x, target_num, on_paint)
             if self.save_format == "heat_map":
                 if passed_time > save_times * self.save_params[1]:
                     self.maps.append(self.__heat_map(x, on_paint))
@@ -545,6 +410,7 @@ class people_flow():
         
         # かかった時間を出力
         
+        print(str(fiftieth_exited))
         print( " 総合時間 " + str(total_time) + "s" )
         print( " 測定時間 " + str(calucurate_time) + str(counts)+ "s")
         return self.maps if self.save_format == "heat_map" else None
