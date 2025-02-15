@@ -151,7 +151,7 @@ class people_flow():
                         right_clear = False
         
             # 条件に応じて加速や移動の方向を変える
-            if not left_clear and right_clear and i >3:
+            if not left_clear and right_clear and i >3 and x[i,0] < 157:
                 
                 self.acceleration[i] = True
                 fy = np.array(fy, dtype=float)
@@ -179,7 +179,7 @@ class people_flow():
 
                         # y方向の力を加算
                         fy[i] += np.sum(desired_force)
-            if left_clear and not right_clear and i >3:
+            if left_clear and not right_clear and i >3　and x[i,0] < 157:
                 
                 self.acceleration[i] = True
                 fy = np.array(fy, dtype=float)
