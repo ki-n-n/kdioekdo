@@ -130,7 +130,7 @@ class people_flow():
         # 人と壁の間に働く力を計算
         fx += self.repul_m[0] * (math.e ** (-(x[:, 0] - 135) / self.repul_m[1]))
         fx -= self.repul_m[0] * (math.e ** (-(165 - x[:, 0]) / self.repul_m[1]))
-            return fx,fy
+        return fx,fy
 
     def __calculate(self, x, v, v_opt, p, target_num,
                     target, in_target, stay_target, on_paint):
